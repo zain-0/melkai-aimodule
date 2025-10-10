@@ -1,0 +1,26 @@
+# FastAPI and server
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+
+# OpenRouter and AI models
+openai>=1.0.0
+
+# PDF processing
+pdfplumber>=0.10.0
+PyPDF2>=3.0.0
+
+# Environment and config
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Web search
+requests>=2.31.0
+httpx>=0.25.0
+beautifulsoup4>=4.12.0
+ddgs>=9.6.0
+
+# Utilities
+python-json-logger>=2.0.0
+tenacity>=8.2.0
