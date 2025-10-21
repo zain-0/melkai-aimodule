@@ -10,7 +10,8 @@ A FastAPI-based tool for comparing different AI models in analyzing lease agreem
 - 📊 **Comprehensive Metrics**: Track cost, time, citations, and accuracy for each model
 - 🎯 **Citation Verification**: Prioritize .gov sources and track law references
 - ⚡ **Parallel Processing**: Run multiple model analyses simultaneously
-- 📖 **Interactive API Docs**: Built-in Swagger UI for easy testing
+- � **Maintenance Workflow**: NEW! Evaluate maintenance requests and generate tenant messages + vendor work orders
+- �📖 **Interactive API Docs**: Built-in Swagger UI for easy testing
 
 ## Supported Models
 
@@ -63,6 +64,46 @@ For detailed model comparison, pricing, and recommendations, see **[MODELS.md](M
 
 ## Installation
 
+### Option 1: Docker Deployment (Recommended for EC2/Production) 🐳
+
+**Fastest way to deploy to your EC2 instance:**
+
+1. **Clone the repository**
+```bash
+git clone <your-repo-url>
+cd comparision-research-melk-ai
+```
+
+2. **Set up environment variables**
+```bash
+# Copy the example env file
+cp .env.example .env
+
+# Edit .env and add your OpenRouter API key
+# OPENROUTER_API_KEY=your_actual_key_here
+```
+
+3. **Deploy to EC2 (Windows PowerShell)**
+```powershell
+.\deploy.ps1
+```
+
+**That's it!** Your API will be available at: `http://18.118.110.218:8000/docs`
+
+For detailed Docker deployment instructions, see:
+- **[QUICKSTART.md](QUICKSTART.md)** - Quick deployment guide
+- **[README_DEPLOYMENT.md](README_DEPLOYMENT.md)** - Comprehensive deployment documentation
+
+**Common Commands:**
+```powershell
+.\deploy.ps1           # Deploy/update application
+.\deploy.ps1 -Logs     # View logs
+.\deploy.ps1 -Restart  # Restart application
+.\deploy.ps1 -Stop     # Stop application
+```
+
+### Option 2: Local Development Installation
+
 1. **Clone the repository**
 ```bash
 git clone <your-repo-url>
@@ -90,7 +131,20 @@ cp .env.example .env
 
 ## Usage
 
-### Start the Server
+### Docker (Production)
+
+```bash
+# Local testing with Docker
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
+```
+
+### Local Development
 
 ```bash
 # Using uvicorn directly
@@ -364,6 +418,59 @@ Get list of all available providers with their model counts.
   ]
 }
 ```
+
+### 8. Maintenance Workflow (NEW! 🔧)
+```http
+POST /maintenance/workflow
+```
+
+**Complete maintenance workflow in ONE API call** - evaluates maintenance request against lease, generates professional tenant message, and creates vendor work order (if approved).
+
+**Parameters:**
+- `file` (form-data): PDF lease file
+- `maintenance_request` (form-data): Description of the maintenance issue
+- `landlord_notes` (form-data, optional): Additional context from landlord
+
+**Example using curl:**
+```bash
+curl -X POST "http://localhost:8000/maintenance/workflow" \
+  -F "file=@lease.pdf" \
+  -F "maintenance_request=Heater is broken, no heat for 2 days" \
+  -F "landlord_notes=Emergency - freezing temperatures outside"
+```
+
+**Response:**
+```json
+{
+  "maintenance_request": "Heater is broken, no heat for 2 days",
+  "decision": "approved",
+  "decision_reasons": [
+    "Lease Section 8.2 states landlord maintains heating systems",
+    "Heating is essential habitability requirement"
+  ],
+  "lease_clauses_cited": [
+    "Section 8.2: Landlord shall maintain and repair all heating systems"
+  ],
+  "tenant_message": "We have received your maintenance request regarding the heating system. Per Section 8.2 of the lease, we are responsible for maintaining heating systems. This is a high priority repair and we will dispatch a licensed HVAC technician immediately. Expected completion: 24-48 hours.",
+  "tenant_message_tone": "approved",
+  "estimated_timeline": "24-48 hours",
+  "alternative_action": null,
+  "vendor_work_order": {
+    "work_order_title": "Emergency Heating System Repair - 123 Main St",
+    "comprehensive_description": "Heating system failure at 123 Main St, Unit 4B. No heat for 2 days during freezing temperatures. Requires immediate HVAC inspection and repair. Contact: John Smith.",
+    "urgency_level": "emergency"
+  }
+}
+```
+
+**Cost:** FREE ($0.00) - Uses Llama 3.3 free model
+
+**See detailed documentation:** [MAINTENANCE_WORKFLOW_API.md](MAINTENANCE_WORKFLOW_API.md)
+
+**Individual Endpoints** (for separate operations):
+- `POST /maintenance/evaluate` - Evaluate request and generate tenant message only
+- `POST /maintenance/vendor` - Generate vendor work order only
+- `POST /tenant/rewrite` - Rewrite tenant's message to be more professional
 
 ## Understanding the Results
 

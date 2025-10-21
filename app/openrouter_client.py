@@ -17,7 +17,9 @@ from app.models import (
     ViolationCategory,
     MaintenanceResponse,
     VendorWorkOrder,
-    TenantMessageRewrite
+    TenantMessageRewrite,
+    MoveOutResponse,
+    MaintenanceWorkflow
 )
 from app.exceptions import AITimeoutError, AIModelError
 
@@ -88,6 +90,94 @@ class OpenRouterClient:
         sanitized = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F]', '', sanitized)
         
         return sanitized
+    
+    def _extract_json_from_markdown(self, text: str) -> Optional[str]:
+        """
+        SUPER ROBUST JSON extraction from markdown code blocks or plain text.
+        Handles truncated responses, malformed JSON, and various formatting issues.
+        
+        Args:
+            text: Response text that may contain markdown
+            
+        Returns:
+            Extracted JSON string or None if not found
+        """
+        # Strategy 1: Try to find JSON within markdown code blocks (```json ... ```)
+        json_block_patterns = [
+            r'```json\s*(\{.*?\})\s*```',  # Explicit json marker
+            r'```\s*(\{.*?\})\s*```',      # Generic code block
+        ]
+        
+        for pattern in json_block_patterns:
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                logger.info("Found JSON within markdown code block")
+                json_str = match.group(1).strip()
+                # Try to fix truncated JSON
+                return self._fix_truncated_json(json_str)
+        
+        # Strategy 2: Find JSON between code fences even if incomplete
+        # Handle case where closing ``` is missing due to truncation
+        incomplete_pattern = r'```(?:json)?\s*(\{.*)'
+        match = re.search(incomplete_pattern, text, re.DOTALL)
+        if match:
+            logger.warning("Found incomplete markdown block (no closing fence)")
+            json_str = match.group(1).strip()
+            # Remove any trailing ``` if present
+            json_str = re.sub(r'```\s*$', '', json_str)
+            return self._fix_truncated_json(json_str)
+        
+        # Strategy 3: Find JSON object directly (first { to last })
+        json_start = text.find("{")
+        json_end = text.rfind("}") + 1
+        
+        if json_start != -1 and json_end > json_start:
+            logger.info("Found JSON without markdown code block")
+            json_str = text[json_start:json_end].strip()
+            return self._fix_truncated_json(json_str)
+        
+        logger.error("Could not find JSON in response")
+        return None
+    
+    def _fix_truncated_json(self, json_str: str) -> str:
+        """
+        Attempt to fix truncated/incomplete JSON by adding missing closing brackets.
+        
+        Args:
+            json_str: Potentially truncated JSON string
+            
+        Returns:
+            Fixed JSON string
+        """
+        # Count opening and closing braces/brackets
+        open_braces = json_str.count('{')
+        close_braces = json_str.count('}')
+        open_brackets = json_str.count('[')
+        close_brackets = json_str.count(']')
+        
+        # If already balanced, return as-is
+        if open_braces == close_braces and open_brackets == close_brackets:
+            return json_str
+        
+        logger.warning(f"JSON appears truncated: {{ {open_braces}/{close_braces}, [ {open_brackets}/{close_brackets}")
+        
+        # Remove any incomplete string at the end (ends with quote but no closing)
+        # Pattern: ends with a quote and no comma/bracket after
+        json_str = re.sub(r',?\s*"[^"]*$', '', json_str)
+        
+        # Close any open arrays first
+        while open_brackets > close_brackets:
+            json_str += ']'
+            close_brackets += 1
+            logger.info("Added missing ]")
+        
+        # Then close any open objects
+        while open_braces > close_braces:
+            json_str += '}'
+            close_braces += 1
+            logger.info("Added missing }")
+        
+        return json_str
     
     def _call_ai_with_retry(self, **kwargs):
         """
@@ -242,7 +332,7 @@ class OpenRouterClient:
                     }
                 ],
                 temperature=0.1,  # Low temperature for consistency
-                max_tokens=4000,
+                max_tokens=16000,  # Increased for comprehensive analysis
             )
             
             # Parse response - now returns violations AND lease_info data
@@ -330,7 +420,7 @@ class OpenRouterClient:
         prompt = f"""Analyze the following lease agreement for potential violations of landlord-tenant laws.
 
 FULL LEASE TEXT:
-{lease_info.full_text[:8000]}  # Truncate to avoid token limits
+{lease_info.full_text[:25000]}  # Increased for comprehensive analysis
 
 """
         
@@ -597,7 +687,7 @@ Return your analysis in the following JSON format:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a legal expert specializing in landlord-tenant law. Analyze lease agreements for potential violations and categorize them into: rent_increase, tenant_owner_rights, fair_housing_laws, licensing, or others."
+                        "content": "You are a legal AI that analyzes lease agreements. You MUST return ONLY valid, complete JSON. Never add explanatory text, markdown formatting, or code blocks. Focus on accuracy and completeness."
                     },
                     {
                         "role": "user",
@@ -605,7 +695,7 @@ Return your analysis in the following JSON format:
                     }
                 ],
                 temperature=0.3,
-                max_tokens=4000
+                max_tokens=32000  # Increased to handle complete JSON responses
             )
             
             # Extract response
@@ -668,80 +758,64 @@ Return your analysis in the following JSON format:
             return {}, metrics, None
     
     def _build_categorized_prompt(self, lease_info: LeaseInfo) -> str:
-        """Build the categorized analysis prompt"""
+        """Build an optimized, concise categorized analysis prompt"""
         
-        prompt = f"""Analyze the following lease agreement for potential violations of landlord-tenant laws.
+        prompt = f"""Analyze this lease for landlord-tenant law violations.
 
-FULL LEASE TEXT:
-{lease_info.full_text[:8000]}  # Truncate to avoid token limits
+LEASE TEXT:
+{lease_info.full_text[:25000]}
 
-INSTRUCTIONS:
-1. FIRST: Extract key information from the lease:
-   - Property location (address, city, state, county)
-   - Landlord name
-   - Tenant name
-   - Monthly rent amount
-   - Security deposit amount
-   - Lease duration/term
+TASK:
+1. Extract lease info (address, city, state, county, landlord, tenant, rent, deposit, duration)
+2. Search .gov websites for relevant landlord-tenant laws at that location
+3. Identify violations and categorize as: rent_increase, tenant_owner_rights, fair_housing_laws, licensing, or others
+4. For each violation: provide category, type, description, severity, confidence (0-1), **exact lease clause text** (REQUIRED), recommended_action (1-2 sentences), and .gov citations
 
-2. Search the web for relevant landlord-tenant laws from .gov websites for that location
+CRITICAL RULES:
+- "lease_clause" MUST contain exact quoted text from the lease (NEVER null/empty)
+- If no specific clause exists, quote the relevant section or write "General lease structure"
+- All fields are REQUIRED except those marked "or null"
 
-3. Prioritize government sources: state, county, and city .gov websites
-
-4. Identify any violations or potential issues in the lease
-
-5. CATEGORIZE each violation into ONE of these categories:
-   - "rent_increase": Violations related to rent increases, caps, notice requirements
-   - "tenant_owner_rights": Violations of tenant rights or landlord obligations (repairs, entry, privacy, etc.)
-   - "fair_housing_laws": Discrimination, accessibility, protected classes violations
-   - "licensing": Property licensing, registration, permit violations
-   - "others": Any violation that doesn't fit the above categories
-
-6. For each violation, provide:
-   - Category (must be one of the 5 above)
-   - Violation type and description
-   - Severity (low, medium, high, critical)
-   - Confidence score (0.0 to 1.0)
-   - Specific lease clause that violates the law
-   - Citations with .gov source URLs and specific law references
-
-Return your analysis in the following JSON format:
-```json
+OUTPUT FORMAT (JSON only, no markdown, no extra text):
 {{
   "lease_info": {{
-    "address": "full property address or null",
-    "city": "city name or null",
-    "state": "2-letter state code or null",
-    "county": "county name or null",
-    "landlord": "landlord name or null",
-    "tenant": "tenant name or null",
-    "rent_amount": "monthly rent (e.g., '$1,500') or null",
-    "security_deposit": "security deposit amount or null",
-    "lease_duration": "lease term (e.g., '12 months') or null"
+    "address": "string or null",
+    "city": "string or null",
+    "state": "2-letter code or null",
+    "county": "string or null",
+    "landlord": "string or null",
+    "tenant": "string or null",
+    "rent_amount": "$X,XXX or null",
+    "security_deposit": "$X,XXX or null",
+    "lease_duration": "X months or null"
   }},
   "violations": [
     {{
       "category": "rent_increase|tenant_owner_rights|fair_housing_laws|licensing|others",
-      "violation_type": "string",
-      "description": "string",
+      "violation_type": "brief title",
+      "description": "detailed explanation of violation",
       "severity": "low|medium|high|critical",
       "confidence_score": 0.0-1.0,
-      "lease_clause": "exact text from lease",
+      "lease_clause": "REQUIRED: exact quoted text from lease (never null)",
+      "recommended_action": "Actionable fix (1-2 sentences)",
       "citations": [
         {{
           "source_url": ".gov URL",
-          "title": "page title",
-          "relevant_text": "specific text from source",
-          "law_reference": "e.g., State Code § 123.45",
-          "is_gov_site": true|false
+          "title": "source title",
+          "relevant_text": "relevant excerpt",
+          "law_reference": "Code § X.XX",
+          "is_gov_site": true
         }}
       ]
     }}
   ]
 }}
-```
 
-Be thorough in your analysis. Search for all relevant laws and regulations. Provide specific citations and law references.
+IMPORTANT: 
+- Return ONLY the JSON object
+- NO markdown code blocks
+- NO explanatory text before/after
+- Ensure valid, complete JSON
 """
         
         return prompt
@@ -762,15 +836,13 @@ Be thorough in your analysis. Search for all relevant laws and regulations. Prov
         lease_info_data = None
         
         try:
-            # Extract JSON from response
-            json_start = response_text.find("{")
-            json_end = response_text.rfind("}") + 1
+            # Extract JSON from response (handle markdown code blocks)
+            json_str = self._extract_json_from_markdown(response_text)
             
-            if json_start == -1 or json_end == 0:
+            if not json_str:
                 logger.error("No JSON found in response")
+                logger.error(f"Response preview: {response_text[:500]}")
                 return violations_by_category, lease_info_data
-            
-            json_str = response_text[json_start:json_end]
             
             # Sanitize JSON string to remove invalid control characters
             json_str = self._sanitize_json_string(json_str)
@@ -818,15 +890,20 @@ Be thorough in your analysis. Search for all relevant laws and regulations. Prov
                         logger.warning(f"Invalid category '{category_str}', defaulting to 'others'")
                         category = ViolationCategory.OTHERS
                     
-                    # Create categorized violation
+                    # Create categorized violation (handle null values gracefully)
+                    lease_clause = v_data.get("lease_clause")
+                    if lease_clause is None or lease_clause == "null":
+                        lease_clause = "No specific clause cited"
+                    
                     violation = CategorizedViolation(
                         violation_type=v_data.get("violation_type", "Unknown"),
                         category=category,
                         description=v_data.get("description", ""),
                         severity=v_data.get("severity", "medium"),
                         confidence_score=v_data.get("confidence_score", 0.5),
-                        lease_clause=v_data.get("lease_clause", ""),
-                        citations=citations
+                        lease_clause=lease_clause,
+                        citations=citations,
+                        recommended_action=v_data.get("recommended_action") or "Review with legal counsel and amend lease accordingly"
                     )
                     
                     # Add to appropriate category
@@ -889,7 +966,7 @@ Be thorough in your analysis. Search for all relevant laws and regulations. Prov
                     }
                 ],
                 temperature=0.3,
-                max_tokens=800  # Limit response size
+                max_tokens=2000  # Increased for detailed maintenance responses
             )
             
             # Extract response
@@ -1144,7 +1221,7 @@ Examples:
                     }
                 ],
                 temperature=0.3,
-                max_tokens=800  # Limit response size
+                max_tokens=1500  # Increased for comprehensive work orders
             )
             
             # Extract response
@@ -1341,6 +1418,302 @@ Rules:
                 urgency_level="routine"
             )
 
+    def process_maintenance_workflow(
+        self,
+        maintenance_request: str,
+        lease_info: 'LeaseInfo',
+        landlord_notes: Optional[str] = None
+    ) -> 'MaintenanceWorkflow':
+        """
+        Complete maintenance workflow: Evaluate against lease + Generate tenant message + Create vendor work order
+        
+        This combines evaluation and work order generation in a single workflow:
+        1. Evaluates maintenance request against lease
+        2. Generates professional message for tenant (approval or rejection)
+        3. Creates vendor work order (only if approved)
+        
+        Args:
+            maintenance_request: The maintenance issue reported by tenant
+            lease_info: Extracted lease information
+            landlord_notes: Optional notes/context from landlord
+            
+        Returns:
+            MaintenanceWorkflow with complete response for tenant and vendor
+        """
+        from app.models import MaintenanceWorkflow, VendorWorkOrder
+        
+        model_name = "meta-llama/llama-3.3-8b-instruct:free"
+        
+        try:
+            # Build combined workflow prompt
+            prompt = self._build_workflow_prompt(maintenance_request, lease_info, landlord_notes)
+            
+            # Make API call with retry
+            response = self._call_ai_with_retry(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a property management assistant. Evaluate maintenance requests against lease agreements, generate professional messages for tenants, and create detailed work orders for vendors. Be fair, professional, and thorough."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.3,
+                max_tokens=3000  # Increased for comprehensive workflow response
+            )
+            
+            # Extract response
+            response_text = response.choices[0].message.content
+            
+            # LOG THE FULL RESPONSE
+            logger.info("="*80)
+            logger.info("FULL AI RESPONSE FOR MAINTENANCE WORKFLOW:")
+            logger.info(response_text)
+            logger.info("="*80)
+            
+            # Parse workflow response
+            workflow_data = self._parse_workflow_response(response_text, maintenance_request)
+            
+            return workflow_data
+            
+        except Exception as e:
+            logger.error(f"Error processing maintenance workflow: {str(e)}")
+            
+            # Return default workflow on error
+            return MaintenanceWorkflow(
+                maintenance_request=maintenance_request,
+                tenant_message="We have received your maintenance request and will respond shortly.",
+                tenant_message_tone="neutral",
+                decision="approved",
+                decision_reasons=["Unable to evaluate against lease - defaulting to approval"],
+                lease_clauses_cited=[],
+                vendor_work_order=None,
+                estimated_timeline=None,
+                alternative_action=None
+            )
+    
+    def _build_workflow_prompt(self, maintenance_request: str, lease_info: 'LeaseInfo', landlord_notes: Optional[str] = None) -> str:
+        """Build the complete maintenance workflow prompt"""
+        
+        prompt = f"""You are a property management assistant handling a complete maintenance workflow. 
+
+MAINTENANCE REQUEST FROM TENANT:
+{maintenance_request}
+"""
+        
+        # Add landlord notes if provided
+        if landlord_notes:
+            prompt += f"""
+LANDLORD'S NOTES/CONTEXT:
+{landlord_notes}
+"""
+        
+        prompt += f"""
+LEASE DOCUMENT:
+{lease_info.full_text[:6000]}
+
+YOUR TASKS:
+1. EVALUATE the maintenance request against the lease agreement
+   - Determine if landlord or tenant is responsible
+   - APPROVE if lease says landlord must handle OR if unclear (default to landlord)
+   - REJECT if lease clearly states tenant is responsible
+   - Cite exact lease clauses
+
+2. GENERATE a professional message to send to the TENANT
+   - If APPROVED: Acknowledge request, explain landlord will handle it, provide timeline
+   - If REJECTED: Politely explain tenant's responsibility per lease, suggest next steps
+   - Be professional, clear, and empathetic
+   - Reference specific lease clauses
+
+3. CREATE a vendor work order (ONLY if APPROVED)
+   - If APPROVED: Generate complete work order with property address, issue details, urgency
+   - If REJECTED: Set vendor_work_order to null
+
+IMPORTANT RULES:
+- Base DECISION only on the lease agreement
+- If unclear, default to APPROVE (landlord's standard duty)
+- Incorporate landlord notes naturally into messages
+- Be fair and professional
+- Return ONLY valid JSON, no extra text
+
+RETURN FORMAT (JSON only):
+{{
+  "decision": "approved" or "rejected",
+  "decision_reasons": ["Reason 1 based on lease", "Reason 2"],
+  "lease_clauses_cited": ["Exact lease clause 1", "Exact lease clause 2"],
+  "tenant_message": "Professional message to send to tenant (3-5 sentences explaining decision, timeline if approved, or next steps if rejected)",
+  "tenant_message_tone": "approved|regretful|informative",
+  "estimated_timeline": "Timeline for repair if approved (e.g., '24-48 hours'), or null if rejected",
+  "alternative_action": "What tenant should do if rejected (e.g., 'Please hire a licensed contractor'), or null if approved",
+  "vendor_work_order": {{
+    "work_order_title": "Brief title (e.g., 'Emergency Heater Repair - Unit 4B')",
+    "comprehensive_description": "Complete description for vendor: issue details, property address from lease, scope of work, access instructions, tenant contact, urgency details. NO financial info.",
+    "urgency_level": "routine|urgent|emergency"
+  }} OR null if rejected
+}}
+
+EXAMPLES:
+
+Example 1 - APPROVED (Heater broken):
+{{
+  "decision": "approved",
+  "decision_reasons": ["Lease Section 8.2 states landlord maintains heating systems", "Heating is essential habitability requirement"],
+  "lease_clauses_cited": ["Section 8.2: Landlord shall maintain and repair all heating, plumbing, and electrical systems"],
+  "tenant_message": "We have received your maintenance request regarding the heating system. Per Section 8.2 of the lease, we are responsible for maintaining heating systems. This is a high priority repair and we will dispatch a licensed HVAC technician immediately. Expected completion: 24-48 hours. We will keep you updated on progress.",
+  "tenant_message_tone": "approved",
+  "estimated_timeline": "24-48 hours",
+  "alternative_action": null,
+  "vendor_work_order": {{
+    "work_order_title": "Emergency Heating System Repair - 123 Main St Unit 4B",
+    "comprehensive_description": "Heating system failure reported by tenant at 123 Main St, Unit 4B. No heat for 2 days during freezing temperatures. Requires immediate HVAC inspection and repair. Property contact: John Smith, xxx-xxx-xxxx. Access available Mon-Fri 9am-5pm. Tenant can coordinate access.",
+    "urgency_level": "emergency"
+  }}
+}}
+
+Example 2 - REJECTED (Dishwasher):
+{{
+  "decision": "rejected",
+  "decision_reasons": ["Lease Section 12.3 assigns appliance maintenance to tenant", "Dishwasher is not landlord's responsibility per lease"],
+  "lease_clauses_cited": ["Section 12.3: Tenant is responsible for maintenance and repair of all appliances including dishwasher, microwave, and washer/dryer"],
+  "tenant_message": "We have received your maintenance request regarding the dishwasher. After reviewing Section 12.3 of the lease agreement, appliance maintenance and repairs are the tenant's responsibility. You may hire a licensed appliance technician of your choice to diagnose and repair the issue. Please keep receipts for your records.",
+  "tenant_message_tone": "regretful",
+  "estimated_timeline": null,
+  "alternative_action": "Please hire a licensed appliance technician to repair or replace the dishwasher at your expense",
+  "vendor_work_order": null
+}}
+
+NOW PROCESS THE MAINTENANCE REQUEST ABOVE AND RETURN ONLY THE JSON:
+"""
+        
+        return prompt
+    
+    def _parse_workflow_response(
+        self,
+        response_text: str,
+        original_request: str
+    ) -> 'MaintenanceWorkflow':
+        """Parse maintenance workflow response from model"""
+        from app.models import MaintenanceWorkflow, VendorWorkOrder
+        
+        try:
+            logger.info("="*80)
+            logger.info("PARSING MAINTENANCE WORKFLOW RESPONSE")
+            logger.info(f"Response length: {len(response_text)} characters")
+            logger.info("="*80)
+            
+            # Try multiple extraction methods
+            json_str = None
+            
+            # Method 1: Look for ```json code blocks
+            if "```json" in response_text:
+                logger.info("Found ```json marker, extracting...")
+                parts = response_text.split("```json")
+                if len(parts) > 1:
+                    json_str = parts[1].split("```")[0].strip()
+                    logger.info("Extracted from ```json block")
+            
+            # Method 2: Look for plain ``` code blocks
+            elif "```" in response_text and json_str is None:
+                logger.info("Found ``` marker, extracting...")
+                parts = response_text.split("```")
+                if len(parts) > 1:
+                    json_str = parts[1].strip()
+                    logger.info("Extracted from ``` block")
+            
+            # Method 3: Find { to } brackets
+            if json_str is None:
+                logger.info("No code blocks found, looking for JSON brackets...")
+                json_start = response_text.find("{")
+                json_end = response_text.rfind("}") + 1
+                
+                if json_start != -1 and json_end > json_start:
+                    json_str = response_text[json_start:json_end]
+                    logger.info(f"Found JSON from position {json_start} to {json_end}")
+                else:
+                    logger.error("No JSON brackets found in response")
+                    logger.error(f"Full response: {response_text}")
+                    return MaintenanceWorkflow(
+                        maintenance_request=original_request,
+                        tenant_message="We have received your maintenance request and will respond shortly.",
+                        tenant_message_tone="neutral",
+                        decision="approved",
+                        decision_reasons=["Unable to parse evaluation"],
+                        lease_clauses_cited=[],
+                        vendor_work_order=None
+                    )
+            
+            # Sanitize JSON string to remove invalid control characters
+            json_str = self._sanitize_json_string(json_str)
+            
+            # Log what we're about to parse
+            logger.info("SANITIZED JSON STRING TO PARSE:")
+            logger.info(json_str)
+            logger.info("="*80)
+            
+            # Parse the JSON
+            data = json.loads(json_str)
+            logger.info("JSON PARSED SUCCESSFULLY!")
+            logger.info(f"Keys found: {list(data.keys())}")
+            logger.info(f"Decision: {data.get('decision', 'unknown')}")
+            
+            # Parse vendor work order if present
+            vendor_work_order = None
+            if data.get("vendor_work_order") is not None:
+                wo_data = data["vendor_work_order"]
+                vendor_work_order = VendorWorkOrder(
+                    maintenance_request=original_request,
+                    work_order_title=wo_data.get("work_order_title", "Maintenance Work Order"),
+                    comprehensive_description=wo_data.get("comprehensive_description", f"Please address: {original_request}"),
+                    urgency_level=wo_data.get("urgency_level", "routine")
+                )
+            
+            return MaintenanceWorkflow(
+                maintenance_request=original_request,
+                tenant_message=data.get("tenant_message", "We will review your request and respond shortly."),
+                tenant_message_tone=data.get("tenant_message_tone", "neutral"),
+                decision=data.get("decision", "approved"),
+                decision_reasons=data.get("decision_reasons", []),
+                lease_clauses_cited=data.get("lease_clauses_cited", []),
+                vendor_work_order=vendor_work_order,
+                estimated_timeline=data.get("estimated_timeline"),
+                alternative_action=data.get("alternative_action")
+            )
+        
+        except json.JSONDecodeError as e:
+            logger.error("="*80)
+            logger.error(f"JSON DECODE ERROR: {str(e)}")
+            logger.error(f"Error at position: {e.pos if hasattr(e, 'pos') else 'unknown'}")
+            logger.error(f"JSON string that failed:")
+            logger.error(json_str if json_str else "N/A")
+            logger.error("="*80)
+            return MaintenanceWorkflow(
+                maintenance_request=original_request,
+                tenant_message="We will review your maintenance request and respond shortly.",
+                tenant_message_tone="neutral",
+                decision="approved",
+                decision_reasons=["Error parsing evaluation - defaulting to approval"],
+                lease_clauses_cited=[],
+                vendor_work_order=None
+            )
+        except Exception as e:
+            logger.error("="*80)
+            logger.error(f"UNEXPECTED ERROR: {str(e)}")
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Response text (first 500 chars): {response_text[:500]}")
+            logger.error("="*80)
+            return MaintenanceWorkflow(
+                maintenance_request=original_request,
+                tenant_message="We will review your maintenance request and respond shortly.",
+                tenant_message_tone="neutral",
+                decision="approved",
+                decision_reasons=[f"Error processing request: {type(e).__name__}"],
+                lease_clauses_cited=[],
+                vendor_work_order=None
+            )
+
     def rewrite_tenant_message(
         self,
         tenant_message: str
@@ -1376,7 +1749,7 @@ Rules:
                     }
                 ],
                 temperature=0.4,
-                max_tokens=600  # Shorter for tenant messages
+                max_tokens=1000  # Increased for detailed tenant messages
             )
             
             # Extract response
@@ -1561,6 +1934,389 @@ Rules:
                 estimated_urgency="routine"
             )
 
+    def evaluate_move_out_request(
+        self,
+        move_out_request: str,
+        lease_info: LeaseInfo,
+        owner_notes: Optional[str] = None
+    ) -> 'MoveOutResponse':
+        """
+        Evaluate tenant move-out request against lease terms
+        
+        Args:
+            move_out_request: The tenant's move-out request
+            lease_info: Extracted lease information
+            owner_notes: Optional notes/context from property owner
+            
+        Returns:
+            MoveOutResponse with notice validation, financial obligations, and next steps
+        """
+        model_name = "meta-llama/llama-3.3-8b-instruct:free"
+        
+        try:
+            # Build move-out evaluation prompt
+            prompt = self._build_move_out_prompt(move_out_request, lease_info, owner_notes)
+            
+            # Make API call with retry
+            response = self._call_ai_with_retry(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a property owner evaluating a tenant's move-out request. Check if they provided proper notice according to the lease, calculate any financial obligations, and provide clear next steps."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.3,
+                max_tokens=2000
+            )
+            
+            # Extract response
+            response_text = response.choices[0].message.content
+            
+            # LOG THE FULL RESPONSE
+            logger.info("="*80)
+            logger.info("FULL AI RESPONSE FOR MOVE-OUT EVALUATION:")
+            logger.info(response_text)
+            logger.info("="*80)
+            
+            # Parse evaluation response
+            evaluation_data = self._parse_move_out_response(response_text, move_out_request)
+            
+            return evaluation_data
+            
+        except Exception as e:
+            logger.error(f"Error evaluating move-out request: {str(e)}")
+            
+            # Return default response on error
+            return MoveOutResponse(
+                move_out_request=move_out_request,
+                decision="requires_attention",
+                response_message="We received your move-out request and will review it shortly.",
+                notice_period_valid=False,
+                notice_period_required="Unknown - Error evaluating lease",
+                notice_period_given="Unable to determine",
+                move_out_date="Unknown",
+                financial_summary={
+                    "rent_owed": "Unable to calculate",
+                    "security_deposit": "Will be reviewed",
+                    "other_fees": "To be determined"
+                },
+                lease_clauses_cited=[],
+                next_steps=["We will evaluate your notice period and respond within 2 business days"]
+            )
+    
+    def _build_move_out_prompt(self, move_out_request: str, lease_info: LeaseInfo, owner_notes: Optional[str] = None) -> str:
+        """Build the move-out evaluation prompt"""
+        
+        # Get current date
+        from datetime import datetime
+        today = datetime.now().strftime("%B %d, %Y")  # e.g., "October 16, 2025"
+        
+        prompt = f"""You are a property owner evaluating a tenant's move-out request. Review the lease agreement and determine:
+1. If the tenant provided proper notice according to the lease
+2. What financial obligations remain (rent, fees, security deposit)
+3. Clear next steps for the tenant
+
+TODAY'S DATE: {today}
+IMPORTANT: Use this date to calculate notice periods and determine if the tenant gave sufficient notice.
+
+MOVE-OUT REQUEST FROM TENANT:
+{move_out_request}
+"""
+        
+        # Add owner notes if provided
+        if owner_notes:
+            prompt += f"""
+PROPERTY OWNER'S NOTES:
+{owner_notes}
+
+NOTE: Consider the owner's notes when crafting the response, but the evaluation must be based on the lease agreement.
+"""
+        
+        prompt += f"""
+LEASE DOCUMENT:
+{lease_info.full_text[:6000]}
+
+INSTRUCTIONS:
+1. Carefully review the lease to find:
+   - Required notice period (e.g., "30 days", "60 days", "one month")
+   - Notice requirements (written, email, certified mail, etc.)
+   - Rent payment obligations during notice period
+   - Security deposit return conditions
+   - Any move-out fees or penalties
+   - Early termination clauses if applicable
+
+2. Determine from the move-out request:
+   - When did tenant give notice (or is giving notice now)?
+   - What is their intended move-out date?
+   - Did they follow proper notice procedures?
+
+3. CRITICAL - Calculate using TODAY'S DATE ({today}):
+   IMPORTANT: When calculating dates, ALWAYS consider the FULL DATE including YEAR!
+   
+   Step-by-step calculation:
+   a) If tenant says "I want to move out on [DATE]" → They are giving notice TODAY ({today})
+   b) Parse the move-out date - if no year mentioned, assume current year (2025) OR next year if date already passed
+   c) Count TOTAL CALENDAR DAYS from TODAY ({today}) to their requested move-out date
+   d) Compare TOTAL DAYS to the required notice period from lease
+   e) If TOTAL DAYS >= required notice period → notice_period_valid = TRUE ✓
+   f) If TOTAL DAYS < required notice period → notice_period_valid = FALSE ✗
+   
+   DATE PARSING RULES:
+   - "December 15" or "December 15th" = December 15, 2025 (current year)
+   - "November 1" = November 1, 2025 (current year) 
+   - If date is BEFORE today in current year, assume NEXT YEAR (e.g., "January 15" = January 15, 2026)
+   - "December 15, 2025" or "12/15/2025" = Use exact year specified
+   - Calculate days as: (Target Date - Today's Date) in calendar days
+   
+   Example: TODAY is {today}, tenant wants to move out December 15, lease requires 30 days
+   - Parse: December 15 = December 15, 2025 (same year since December is after October)
+   - Calculate: Days from October 16, 2025 to December 15, 2025 = 60 calendar days
+   - Compare: 60 days >= 30 days required → VALID = TRUE ✓
+   
+   Calculate and provide:
+   - Required notice period from lease
+   - Actual notice period provided by tenant (TOTAL CALENDAR DAYS from today to move-out date)
+   - Last allowed day tenant can stay (today + required notice period, OR their requested date if valid)
+   - Any remaining rent owed (calculate prorated rent if needed)
+   - Security deposit handling
+   - Other applicable fees
+
+4. Cite EXACT clauses from the lease that support your evaluation
+
+5. Write a professional response message to the tenant
+
+6. Provide clear next steps for the tenant
+
+IMPORTANT: Return ONLY valid JSON. Do not include any text before or after the JSON.
+
+Return your evaluation in this exact JSON format:
+{{
+  "notice_period_valid": true or false,
+  "notice_period_required": "Required notice period from lease (e.g., '30 days', '60 days')",
+  "notice_period_provided": "Actual notice period tenant provided (e.g., 'Giving notice today, {today}' or 'X days notice')",
+  "last_day_allowed": "Last day tenant can occupy the property (calculate from today)",
+  "rent_owed": "Description of any remaining rent owed (calculate prorated amounts)",
+  "security_deposit_status": "What will happen with security deposit",
+  "other_fees": "Any other fees or charges that apply",
+  "lease_clauses_cited": ["Exact quote from lease clause 1", "Exact quote from lease clause 2"],
+  "response_message": "Professional message to tenant (3-5 sentences explaining the evaluation)",
+  "next_steps": ["Action item 1 for tenant", "Action item 2 for tenant", "Action item 3 for tenant"]
+}}
+
+CALCULATION EXAMPLES - DO MATH CAREFULLY (TODAY is {today}):
+
+Example 1: SUFFICIENT NOTICE ✓
+- Request: "I want to move out on December 15th" (said today, {today})
+- Lease requires: 30 days notice
+- Parse date: December 15th = December 15, 2025 (same year)
+- Calculation: From October 16, 2025 to December 15, 2025 = 60 calendar days
+- 60 days >= 30 days → notice_period_valid = TRUE ✓
+- decision = "approved"
+- Response: "Your 60-day notice is accepted. You may move out on December 15, 2025."
+
+Example 2: INSUFFICIENT NOTICE ✗
+- Request: "I want to move out on November 1st" (said today, {today})
+- Lease requires: 30 days notice
+- Parse date: November 1st = November 1, 2025 (same year)
+- Calculation: From October 16, 2025 to November 1, 2025 = 16 calendar days
+- 16 days < 30 days → notice_period_valid = FALSE ✗
+- decision = "requires_attention"
+- Response: "Insufficient notice. Lease requires 30 days. You may move out no earlier than November 15, 2025."
+
+Example 3: NEXT YEAR DATE ✓
+- Request: "I want to move out on January 31st" (said today, {today})
+- Lease requires: 60 days notice
+- Parse date: January 31st = January 31, 2026 (next year, since January already passed in 2025)
+- Calculation: From October 16, 2025 to January 31, 2026 = 107 calendar days
+- 107 days >= 60 days → notice_period_valid = TRUE ✓
+- decision = "approved"
+- Response: "Your 107-day notice is accepted. You may move out on January 31, 2026."
+
+Example 4: EXPLICIT YEAR SPECIFIED ✗
+- Request: "I want to move out on October 25, 2025" (said today, {today})
+- Lease requires: 30 days notice
+- Parse date: October 25, 2025 (year specified)
+- Calculation: From October 16, 2025 to October 25, 2025 = 9 calendar days
+- 9 days < 30 days → notice_period_valid = FALSE ✗
+- decision = "requires_attention"
+- Response: "Insufficient notice. Lease requires 30 days. You may move out no earlier than November 15, 2025."
+
+Example 5: PAST NOTICE GIVEN ✓
+- Request: "I gave notice on September 1st, moving out October 15th"
+- Lease requires: 30 days notice
+- Parse dates: September 1, 2025 to October 15, 2025
+- Calculation: September 1 to October 15 = 44 calendar days
+- 44 days >= 30 days → notice_period_valid = TRUE ✓
+- decision = "approved"
+
+CRITICAL REMINDERS:
+- COUNT CALENDAR DAYS including the full year (not just month/day)
+- If no year specified, assume current year UNLESS date already passed this year, then use next year
+- Calculate exact days between two full dates (Month Day, Year format)
+- If days >= required days → notice_period_valid = TRUE, decision = "approved"
+- If days < required days → notice_period_valid = FALSE, decision = "requires_attention"
+- Write response_message as if you ARE the property owner speaking to tenant
+- Be professional, clear, and ACCURATE with date calculations
+- If owner notes mention issues (damages, unpaid rent, etc.), incorporate into response
+- Return ONLY the JSON object, nothing else
+"""
+        
+        return prompt
+    
+    def _parse_move_out_response(
+        self,
+        response_text: str,
+        original_request: str
+    ) -> 'MoveOutResponse':
+        """Parse move-out evaluation response from model"""
+        
+        # Import here to avoid circular import
+        from app.models import MoveOutResponse
+        
+        try:
+            logger.info("="*80)
+            logger.info("PARSING MOVE-OUT RESPONSE")
+            logger.info(f"Response length: {len(response_text)} characters")
+            logger.info("="*80)
+            
+            # Try multiple extraction methods
+            json_str = None
+            
+            # Method 1: Look for ```json code blocks
+            if "```json" in response_text:
+                logger.info("Found ```json marker, extracting...")
+                parts = response_text.split("```json")
+                if len(parts) > 1:
+                    json_str = parts[1].split("```")[0].strip()
+                    logger.info("Extracted from ```json block")
+            
+            # Method 2: Look for plain ``` code blocks
+            elif "```" in response_text and json_str is None:
+                logger.info("Found ``` marker, extracting...")
+                parts = response_text.split("```")
+                if len(parts) > 1:
+                    json_str = parts[1].strip()
+                    logger.info("Extracted from ``` block")
+            
+            # Method 3: Find { to } brackets
+            if json_str is None:
+                logger.info("No code blocks found, looking for JSON brackets...")
+                json_start = response_text.find("{")
+                json_end = response_text.rfind("}") + 1
+                
+                if json_start != -1 and json_end > json_start:
+                    json_str = response_text[json_start:json_end]
+                    logger.info(f"Found JSON from position {json_start} to {json_end}")
+                else:
+                    logger.error("No JSON brackets found in response")
+                    logger.error(f"Full response: {response_text}")
+                    return MoveOutResponse(
+                        move_out_request=original_request,
+                        decision="requires_attention",
+                        response_message="We received your move-out request and will review it shortly.",
+                        notice_period_valid=False,
+                        notice_period_required="Unable to determine",
+                        notice_period_given="Unable to determine",
+                        move_out_date="Unknown",
+                        financial_summary={
+                            "rent_owed": "Unable to calculate",
+                            "security_deposit": "Will be reviewed",
+                            "other_fees": "None specified"
+                        },
+                        lease_clauses_cited=[],
+                        next_steps=["We will evaluate your request and respond within 2 business days"]
+                    )
+            
+            # Sanitize JSON string
+            json_str = self._sanitize_json_string(json_str)
+            
+            # Log what we're about to parse
+            logger.info("SANITIZED JSON STRING TO PARSE:")
+            logger.info(json_str)
+            logger.info("="*80)
+            
+            # Parse the JSON
+            data = json.loads(json_str)
+            logger.info("JSON PARSED SUCCESSFULLY!")
+            logger.info(f"Keys found: {list(data.keys())}")
+            logger.info(f"Notice valid: {data.get('notice_period_valid', 'unknown')}")
+            
+            # Build financial summary from individual fields
+            financial_summary = {
+                "rent_owed": data.get("rent_owed", "To be calculated"),
+                "security_deposit": data.get("security_deposit_status", "Will be reviewed"),
+                "other_fees": data.get("other_fees", "None specified"),
+                "last_day": data.get("last_day_allowed", "Unknown")
+            }
+            
+            # Determine decision based on notice validity
+            decision = "approved" if data.get("notice_period_valid", False) else "requires_attention"
+            
+            return MoveOutResponse(
+                move_out_request=original_request,
+                decision=decision,
+                response_message=data.get("response_message", "We will review your move-out request."),
+                notice_period_valid=data.get("notice_period_valid", False),
+                notice_period_required=data.get("notice_period_required"),
+                notice_period_given=data.get("notice_period_provided"),
+                move_out_date=data.get("last_day_allowed"),
+                financial_summary=financial_summary,
+                lease_clauses_cited=data.get("lease_clauses_cited", []),
+                penalties_or_fees=None,  # Could extract from other_fees if needed
+                next_steps=data.get("next_steps", ["We will respond within 2 business days"]),
+                estimated_refund_timeline=None  # Not in AI response, could be added
+            )
+        
+        except json.JSONDecodeError as e:
+            logger.error("="*80)
+            logger.error(f"JSON DECODE ERROR: {str(e)}")
+            logger.error(f"Error at position: {e.pos if hasattr(e, 'pos') else 'unknown'}")
+            logger.error(f"JSON string that failed:")
+            logger.error(json_str if json_str else "N/A")
+            logger.error("="*80)
+            return MoveOutResponse(
+                move_out_request=original_request,
+                decision="requires_attention",
+                response_message="We received your move-out request and will review it shortly.",
+                notice_period_valid=False,
+                notice_period_required="Unknown - Error parsing",
+                notice_period_given="Unknown",
+                move_out_date="Unknown",
+                financial_summary={
+                    "rent_owed": "Unable to calculate",
+                    "security_deposit": "Will be reviewed",
+                    "other_fees": "None specified"
+                },
+                lease_clauses_cited=[],
+                next_steps=["Error parsing lease - will respond manually within 2 business days"]
+            )
+        except Exception as e:
+            logger.error("="*80)
+            logger.error(f"UNEXPECTED ERROR: {str(e)}")
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Response text (first 500 chars): {response_text[:500]}")
+            logger.error("="*80)
+            return MoveOutResponse(
+                move_out_request=original_request,
+                decision="requires_attention",
+                response_message="We received your move-out request and will review it shortly.",
+                notice_period_valid=False,
+                notice_period_required="Unknown - Error occurred",
+                notice_period_given="Unknown",
+                move_out_date="Unknown",
+                financial_summary={
+                    "rent_owed": "Unable to calculate",
+                    "security_deposit": "Will be reviewed",
+                    "other_fees": "None specified"
+                },
+                lease_clauses_cited=[],
+                next_steps=[f"Error processing request - will respond manually within 2 business days"]
+            )
 
 
 

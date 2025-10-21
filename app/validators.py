@@ -132,6 +132,52 @@ def validate_landlord_notes(notes: str) -> str:
     )
 
 
+def validate_move_out_request(request: str) -> str:
+    """
+    Validate move-out request text
+    
+    Args:
+        request: Move-out request text from tenant
+        
+    Returns:
+        Validated and cleaned request text
+        
+    Raises:
+        ValidationError: If validation fails
+    """
+    return validate_text_input(
+        text=request,
+        field_name="move-out request",
+        min_length=5,
+        max_length=2000
+    )
+
+
+def validate_owner_notes(notes: str) -> str:
+    """
+    Validate owner notes for move-out request (optional field)
+    
+    Args:
+        notes: Owner's notes about the move-out request
+        
+    Returns:
+        Validated and cleaned notes, or empty string if empty
+        
+    Raises:
+        ValidationError: If validation fails
+    """
+    if notes is None or not notes.strip():
+        return ""
+    
+    return validate_text_input(
+        text=notes,
+        field_name="owner notes",
+        min_length=3,
+        max_length=2000,
+        allow_empty=True
+    )
+
+
 def validate_pdf_bytes(pdf_bytes: bytes, max_size_mb: int = 10) -> None:
     """
     Validate PDF file bytes

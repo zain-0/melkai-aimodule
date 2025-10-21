@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from enum import Enum
 import logging
@@ -12,7 +13,9 @@ from app.models import (
     CategorizedAnalysisResult,
     MaintenanceResponse,
     VendorWorkOrder,
-    TenantMessageRewrite
+    TenantMessageRewrite,
+    MoveOutResponse,
+    MaintenanceWorkflow
 )
 from app.analyzer import LeaseAnalyzer
 from app.openrouter_client import OpenRouterClient
@@ -85,7 +88,9 @@ from app.exceptions import (
 from app.validators import (
     validate_maintenance_request,
     validate_tenant_message,
-    validate_landlord_notes
+    validate_landlord_notes,
+    validate_move_out_request,
+    validate_owner_notes
 )
 
 logger = logging.getLogger(__name__)
@@ -95,6 +100,16 @@ app = FastAPI(
     title="Lease Violation Analyzer - Model Comparison API",
     description="Compare different AI models for analyzing lease agreements against government laws",
     version="1.0.0"
+)
+
+# Configure CORS to handle preflight OPTIONS requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins - adjust for production
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, PUT, DELETE, OPTIONS, etc.)
+    allow_headers=["*"],  # Allow all headers
+    expose_headers=["*"]  # Expose all headers in response
 )
 
 # Custom exception handler for API exceptions
@@ -124,6 +139,7 @@ async def root():
             "analyze_categorized": "/analyze/categorized",
             "maintenance_evaluate": "/maintenance/evaluate",
             "vendor_work_order": "/maintenance/vendor",
+            "maintenance_workflow": "/maintenance/workflow",
             "tenant_rewrite": "/tenant/rewrite",
             "docs": "/docs"
         }
@@ -655,6 +671,194 @@ async def generate_vendor_work_order(
         maintenance_request=validated_request,
         lease_info=lease_info,
         landlord_notes=validated_notes
+    )
+    
+    return result
+
+
+@app.post("/maintenance/workflow", response_model=MaintenanceWorkflow)
+async def maintenance_workflow(
+    file: UploadFile = File(..., description="PDF lease file"),
+    maintenance_request: str = Form(..., description="Maintenance request from tenant (e.g., 'Broken heater in bedroom')"),
+    landlord_notes: Optional[str] = Form(None, description="Optional notes from landlord (e.g., 'Emergency - no heat for 3 days', 'Tenant caused damage')")
+):
+    """
+    Complete maintenance workflow: Evaluate request against lease + Generate messages for tenant and vendor (FREE)
+    
+    This is a combined endpoint that provides everything you need in one call:
+    
+    **What it does:**
+    1. **Evaluates maintenance request** against the lease agreement
+    2. **Generates professional message to tenant** (approved or rejected with explanation)
+    3. **Creates vendor work order** (ONLY if approved) ready to send to contractors
+    
+    **Uses Llama 3.3 (FREE model)** for all processing - $0.00 cost
+    
+    **You get:**
+    - ✅ Decision (approved/rejected) based on lease terms
+    - ✅ Professional message to send to tenant
+    - ✅ Lease clauses cited to support decision
+    - ✅ Vendor work order with all details (if approved)
+    - ✅ Timeline and next steps
+    
+    **Examples:**
+    
+    **Example 1 - Approved Request:**
+    ```
+    Request: "Heater is broken, no heat for 2 days"
+    Landlord Notes: "Emergency situation"
+    
+    Response:
+    - Decision: "approved"
+    - Tenant Message: "We have received your maintenance request regarding the heating system. 
+                      Per Section 8.2 of the lease, we are responsible for maintaining heating 
+                      systems. This is an emergency repair and we will dispatch a technician 
+                      immediately. Expected completion: 24 hours."
+    - Vendor Work Order:
+        * Title: "Emergency Heater Repair - 123 Main St"
+        * Description: "Heating system failure at 123 Main St, Apt 4B. No heat for 2 days 
+                       during freezing temperatures. Requires immediate HVAC assessment and repair. 
+                       Contact tenant John Smith at xxx-xxx-xxxx for access."
+        * Urgency: "emergency"
+    ```
+    
+    **Example 2 - Rejected Request:**
+    ```
+    Request: "Dishwasher stopped working"
+    
+    Response:
+    - Decision: "rejected"
+    - Tenant Message: "We have received your maintenance request regarding the dishwasher. 
+                      After reviewing Section 12.3 of the lease agreement, appliance maintenance 
+                      and repairs are the tenant's responsibility. Please arrange for repairs or 
+                      replacement at your expense. You may hire a licensed technician of your choice."
+    - Vendor Work Order: null (not generated for rejected requests)
+    ```
+    
+    Args:
+        file: PDF lease file
+        maintenance_request: The maintenance issue from tenant
+        landlord_notes: Optional context/notes from landlord
+        
+    Returns:
+        MaintenanceWorkflow with complete response including:
+        - decision: "approved" or "rejected"
+        - tenant_message: Professional message to send to tenant
+        - vendor_work_order: Complete work order (only if approved, null if rejected)
+        - lease_clauses_cited: Exact lease clauses supporting the decision
+        - decision_reasons: List of reasons based on lease
+    """
+    # Validate file type
+    if not file.filename.endswith('.pdf'):
+        raise ValidationError(
+            message="Invalid file type",
+            details=f"File '{file.filename}' is not a PDF",
+            suggestion="Please upload a PDF file"
+        )
+    
+    # Read file
+    pdf_bytes = await file.read()
+    
+    # Validate inputs
+    validated_request = validate_maintenance_request(maintenance_request)
+    validated_notes = validate_landlord_notes(landlord_notes) if landlord_notes else None
+    
+    # Extract lease info
+    from app.pdf_parser import PDFParser
+    pdf_parser = PDFParser()
+    lease_info = pdf_parser.extract_lease_info(pdf_bytes)
+    
+    # Process maintenance workflow
+    logger.info(f"Processing complete maintenance workflow for: {validated_request[:50]}...")
+    if validated_notes:
+        logger.info(f"Landlord notes: {validated_notes[:100]}...")
+    
+    openrouter_client = OpenRouterClient()
+    result = openrouter_client.process_maintenance_workflow(
+        maintenance_request=validated_request,
+        lease_info=lease_info,
+        landlord_notes=validated_notes
+    )
+    
+    return result
+
+
+@app.post("/move-out/evaluate", response_model=MoveOutResponse)
+async def evaluate_move_out_request(
+    file: UploadFile = File(..., description="PDF lease file"),
+    move_out_request: str = Form(..., description="Tenant's move-out request (e.g., 'I want to move out on July 15th', 'Giving my 30-day notice')"),
+    owner_notes: Optional[str] = Form(None, description="Optional notes from owner/landlord (e.g., 'Tenant still owes $200 in late fees', 'Property needs deep cleaning', 'Security deposit held for damages')")
+):
+    """
+    Evaluate tenant's move-out request against lease terms and calculate financial obligations (FREE)
+    
+    Uses Llama 3.3 (FREE model) to:
+    - Check if tenant gave proper notice per lease (30, 60, 90 days, etc.)
+    - Calculate final rent, security deposit refund, and any penalties
+    - Determine if move-out date is valid
+    - Review lease clauses about move-out procedures
+    - Account for owner's notes (unpaid rent, damages, fees)
+    - Provide professional response message for tenant
+    - List next steps (inspection, keys, forwarding address, etc.)
+    
+    **Cost**: FREE ($0.00) - Uses Llama 3.3 free model
+    **The AI evaluates fairly based on lease terms + owner's notes.**
+    
+    Args:
+        file: PDF lease file
+        move_out_request: Tenant's move-out notice (e.g., "I'm moving out on June 30th")
+        owner_notes: Optional context from owner (e.g., "Tenant owes $500 in repairs")
+        
+    Returns:
+        MoveOutResponse with:
+        - Decision: approved or requires_attention
+        - Notice period validation
+        - Financial summary (deposit refund, final rent, penalties)
+        - Professional response message for tenant
+        - Next steps for tenant
+        - Lease clauses cited
+        
+    Examples:
+        Request: "I want to move out on July 31st" (given on July 1st)
+        Lease says: "30-day notice required"
+        Response: APPROVED - Proper notice given. Security deposit of $1,500 
+                 will be refunded within 14 days after final inspection.
+        
+        Request: "Moving out in 2 weeks" (given on June 15th)
+        Lease says: "60-day notice required"
+        Response: REQUIRES ATTENTION - Insufficient notice. Lease requires 
+                 60 days. You may be responsible for rent until August 15th 
+                 or lose security deposit as penalty.
+    """
+    # Validate file type
+    if not file.filename.endswith('.pdf'):
+        raise ValidationError(
+            message="Invalid file type",
+            details=f"File '{file.filename}' is not a PDF",
+            suggestion="Please upload a PDF file"
+        )
+    
+    # Read file
+    pdf_bytes = await file.read()
+    
+    # Validate inputs
+    validated_request = validate_move_out_request(move_out_request)
+    validated_notes = validate_owner_notes(owner_notes) if owner_notes else None
+    
+    # Extract lease info
+    from app.pdf_parser import PDFParser
+    pdf_parser = PDFParser()
+    lease_info = pdf_parser.extract_lease_info(pdf_bytes)
+    
+    # Evaluate move-out request
+    logger.info(f"Evaluating move-out request: {validated_request[:100]}...")
+    if validated_notes:
+        logger.info(f"Owner notes: {validated_notes[:100]}...")
+    openrouter_client = OpenRouterClient()
+    result = openrouter_client.evaluate_move_out_request(
+        move_out_request=validated_request,
+        lease_info=lease_info,
+        owner_notes=validated_notes
     )
     
     return result

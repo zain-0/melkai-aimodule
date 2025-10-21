@@ -1,9 +1,14 @@
-# Environment variables
+# ============================================
+# GITIGNORE - Track Only Essential Files
+# ============================================
+# This tracks only files needed to run the app and deploy with Docker
+
+# Environment variables (contains secrets)
 .env
 .env.local
 .env.*.local
 
-# Python
+# Python virtual environment and cache
 __pycache__/
 *.py[cod]
 *$py.class
@@ -12,6 +17,8 @@ __pycache__/
 env/
 venv/
 ENV/
+
+# Python build artifacts (not needed for Docker)
 build/
 develop-eggs/
 dist/
@@ -28,36 +35,75 @@ wheels/
 .installed.cfg
 *.egg
 
-# IDE
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# Test files
+# Test files and sample data
+test_*.py
+*_test.py
 test_leases/
 *.pdf
 
 # Logs
 *.log
+logs/
 
-# Docker deployment
+# Docker deployment package (temporary)
 deploy_package/
 
-# Testing
+# Testing and coverage
 .pytest_cache/
 .coverage
 htmlcov/
 *.cover
+.tox/
 
-# OS
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
 # Temporary files
 *.tmp
 *.temp
+*.bak
+*.swp
 response.json
+
+# Deployment backups on EC2
+*backup-*/
+
+# Deployment scripts (local automation only)
+deploy.ps1
+deploy.sh
+ec2-setup.sh
+redeploy-updated.ps1
+
+# Documentation (keep only essential README and deployment guide)
+REDEPLOY_GUIDE.md
+
+# All other markdown files (we only need README and REDEPLOY_CORS_UPDATE)
+ARCHITECTURE.md
+DEPLOYMENT_CHECKLIST.md
+DEPLOYMENT_SUMMARY.md
+DEPLOYMENT_PACKAGE_README.md
+DOCS_INDEX.md
+FEATURE_SUMMARY.md
+GETTING_STARTED.md
+MAINTENANCE_WORKFLOW_API.md
+MANUAL_DEPLOYMENT.md
+QUICK_START_MAINTENANCE.md
+QUICKSTART.md
+README_DEPLOYMENT.md
+REDEPLOY_QUICK.md
 
 # Lambda (removed)
 lambda/

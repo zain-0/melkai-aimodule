@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  melkai-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: melkai-aimodule
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Override with your .env file
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-10}
+      - SEARCH_RESULTS_LIMIT=${SEARCH_RESULTS_LIMIT:-10}
+    env_file:
+      - .env
+    volumes:
+      # Mount logs directory if needed
+      - ./logs:/app/logs
+    networks:
+      - melkai-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  melkai-network:
+    driver: bridge
+
+volumes:
+  logs:

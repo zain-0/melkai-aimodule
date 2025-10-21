@@ -65,6 +65,22 @@ class VendorWorkOrder(BaseModel):
     urgency_level: str = Field(..., description="'routine', 'urgent', or 'emergency'")
 
 
+class MoveOutResponse(BaseModel):
+    """Landlord's response to tenant move-out request evaluated against lease"""
+    move_out_request: str  # Original move-out request from tenant
+    decision: str = Field(..., description="'approved' or 'requires_attention'")
+    response_message: str  # Professional response message for tenant
+    notice_period_valid: bool  # Whether tenant gave proper notice per lease
+    notice_period_required: Optional[str] = None  # Required notice period from lease
+    notice_period_given: Optional[str] = None  # Actual notice given by tenant
+    move_out_date: Optional[str] = None  # Requested or approved move-out date
+    financial_summary: Dict[str, str]  # Security deposit, final rent, charges, refund amount
+    lease_clauses_cited: List[str]  # Exact lease clauses about move-out/notice
+    penalties_or_fees: Optional[List[str]] = None  # Any penalties for insufficient notice
+    next_steps: List[str]  # What tenant needs to do before moving out
+    estimated_refund_timeline: Optional[str] = None  # When tenant gets deposit back
+
+
 class Violation(BaseModel):
     """Detected lease violation"""
     violation_type: str
@@ -84,6 +100,7 @@ class CategorizedViolation(BaseModel):
     confidence_score: float = Field(..., ge=0.0, le=1.0)
     lease_clause: str
     citations: List[Citation] = []
+    recommended_action: str = Field(default="Review with legal counsel", description="Precise action to address the violation")
 
 
 class AnalysisMetrics(BaseModel):
@@ -234,3 +251,24 @@ class TenantMessageRewrite(BaseModel):
     improvements_made: List[str]  # List of improvements (clarity, professionalism, etc.)
     tone: str = Field(..., description="professional, urgent, polite, etc.")
     estimated_urgency: str = Field(..., description="routine, urgent, emergency")
+
+
+class MaintenanceWorkflow(BaseModel):
+    """Complete maintenance workflow: tenant message, landlord evaluation, and vendor work order"""
+    maintenance_request: str  # Original request from tenant
+    
+    # Tenant communication
+    tenant_message: str  # Professional message to send to tenant
+    tenant_message_tone: str  # Tone of tenant message (approved, regretful, informative)
+    
+    # Landlord decision
+    decision: str = Field(..., description="'approved' or 'rejected'")
+    decision_reasons: List[str]  # Reasons for approval or rejection based on lease
+    lease_clauses_cited: List[str]  # Exact lease clauses supporting decision
+    
+    # Vendor work order (only if approved)
+    vendor_work_order: Optional[VendorWorkOrder] = None  # None if rejected
+    
+    # Additional context
+    estimated_timeline: Optional[str] = None  # Timeline for repair if approved
+    alternative_action: Optional[str] = None  # What tenant should do if rejected
