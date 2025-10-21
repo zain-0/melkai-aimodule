@@ -1,5 +1,7 @@
 # Environment variables
 .env
+.env.local
+.env.*.local
 
 # Python
 __pycache__/
@@ -38,3 +40,24 @@ test_leases/
 
 # Logs
 *.log
+
+# Docker deployment
+deploy_package/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+response.json
+
+# Lambda (removed)
+lambda/
