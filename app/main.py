@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
@@ -866,7 +866,7 @@ async def evaluate_move_out_request(
 
 @app.post("/tenant/rewrite", response_model=TenantMessageRewrite)
 async def rewrite_tenant_message(
-    message: str = Form(..., description="Tenant's original maintenance issue description")
+    message: str = Body(..., embed=True, description="Tenant's original maintenance issue description")
 ):
     """
     Rewrite tenant's maintenance message to be more professional and clear (FREE)
@@ -886,6 +886,13 @@ async def rewrite_tenant_message(
     - Appropriately urgent
     
     **Cost**: FREE ($0.00) - Uses Llama 3.3 free model
+    
+    **Request Body (JSON):**
+    ```json
+    {
+        "message": "heater broke"
+    }
+    ```
     
     Args:
         message: The tenant's original message (can be informal, brief, or vague)
