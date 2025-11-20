@@ -1,10 +1,12 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from enum import Enum
 import logging
 import asyncio
+from collections import defaultdict
+from datetime import datetime, timedelta
 from app.models import (
     AnalysisResult,
     ComparisonResult,
@@ -15,7 +17,9 @@ from app.models import (
     VendorWorkOrder,
     TenantMessageRewrite,
     MoveOutResponse,
-    MaintenanceWorkflow
+    MaintenanceWorkflow,
+    MaintenanceChatRequest,
+    MaintenanceChatResponse
 )
 from app.analyzer import LeaseAnalyzer
 from app.openrouter_client import OpenRouterClient
@@ -124,6 +128,40 @@ async def api_exception_handler(request, exc: APIException):
 # Initialize analyzer
 analyzer = LeaseAnalyzer()
 
+# Rate limiting storage (in-memory for simplicity)
+# For production, use Redis or similar
+rate_limit_storage = defaultdict(list)
+RATE_LIMIT_REQUESTS = 20  # requests
+RATE_LIMIT_WINDOW = 60  # seconds
+
+
+def check_rate_limit(client_ip: str) -> bool:
+    """
+    Check if client has exceeded rate limit
+    
+    Args:
+        client_ip: Client IP address
+        
+    Returns:
+        True if within limit, False if exceeded
+    """
+    now = datetime.now()
+    cutoff = now - timedelta(seconds=RATE_LIMIT_WINDOW)
+    
+    # Remove old requests outside the window
+    rate_limit_storage[client_ip] = [
+        req_time for req_time in rate_limit_storage[client_ip]
+        if req_time > cutoff
+    ]
+    
+    # Check if limit exceeded
+    if len(rate_limit_storage[client_ip]) >= RATE_LIMIT_REQUESTS:
+        return False
+    
+    # Add current request
+    rate_limit_storage[client_ip].append(now)
+    return True
+
 
 @app.get("/")
 async def root():
@@ -140,6 +178,7 @@ async def root():
             "maintenance_evaluate": "/maintenance/evaluate",
             "vendor_work_order": "/maintenance/vendor",
             "maintenance_workflow": "/maintenance/workflow",
+            "maintenance_chat": "/tenant/chat",
             "tenant_rewrite": "/tenant/rewrite",
             "docs": "/docs"
         }
@@ -931,6 +970,154 @@ async def rewrite_tenant_message(
     logger.info(f"Message rewritten successfully. Urgency: {result.estimated_urgency}")
     
     return result
+
+
+@app.post("/tenant/chat", response_model=MaintenanceChatResponse)
+async def maintenance_chat(
+    request: Request,
+    chat_request: MaintenanceChatRequest
+):
+    """
+    Maintenance Assistant Chatbot - Get help with property maintenance issues (FREE)
+    
+    This endpoint provides an AI-powered maintenance assistant that helps tenants troubleshoot
+    common property issues before creating a maintenance ticket. The assistant:
+    
+    - **Provides step-by-step troubleshooting** for plumbing, electrical, HVAC, appliances, doors/windows
+    - **Asks clarifying questions** to understand the issue better
+    - **Suggests SAFE DIY solutions** that require no tools or technical expertise
+    - **Knows when to escalate** to professional maintenance staff
+    - **Maintains conversation context** - understands "yes", "no", "it", "that" based on chat history
+    
+    **Safety First:**
+    - Only suggests solutions safe for tenants without tools
+    - Never suggests electrical work (except checking breakers)
+    - Never suggests gas appliance repairs
+    - Never suggests climbing or accessing dangerous areas
+    - Immediately escalates safety hazards
+    
+    **Escalation Logic:**
+    - After 3-4 back-and-forth exchanges without resolution
+    - When issue requires professional tools or expertise
+    - For safety concerns (gas, electrical sparking, major leaks, etc.)
+    - When tenant tries suggestions but issue persists
+    
+    **Cost**: FREE ($0.00) - Uses Llama 3.3 free model
+    
+    **Rate Limit**: 20 requests per minute per IP address
+    
+    **Request Format:**
+    The frontend should append the new user message to the conversation history before sending.
+    The last message must always be from the user.
+    
+    ```json
+    {
+        "conversationHistory": [
+            {"role": "assistant", "content": "Hello! What seems to be the problem?"},
+            {"role": "user", "content": "my shower has low water pressure"},
+            {"role": "assistant", "content": "Let's troubleshoot this. Is the shower head removable?"},
+            {"role": "user", "content": "it's fixed"}
+        ]
+    }
+    ```
+    
+    **Response Format:**
+    ```json
+    {
+        "response": "Try gently cleaning the nozzle holes with a toothpick. Can you see if water flow improves?",
+        "suggestTicket": false
+    }
+    ```
+    
+    When `suggestTicket` is `true`, the response will include a message like:
+    "This needs professional attention. Would you like to create a maintenance ticket?"
+    
+    **Example Conversation Flow:**
+    
+    1. User: "shower head is clogged"
+       AI: "Let's troubleshoot this. Is the shower head removable, or is it fixed to the pipe?"
+       suggestTicket: false
+    
+    2. User: "it's fixed"
+       AI: "Try gently cleaning the nozzle holes with a toothpick or pin to remove mineral buildup. Can you see if water flow improves?"
+       suggestTicket: false
+    
+    3. User: "still clogged"
+       AI: "The blockage might be in the pipe connection. This needs professional attention to avoid damage. Would you like to create a maintenance ticket?"
+       suggestTicket: true
+    
+    Args:
+        request: FastAPI request object (for rate limiting)
+        chat_request: Chat request with conversation history (last message must be from user)
+        
+    Returns:
+        MaintenanceChatResponse with AI response and ticket suggestion flag
+        
+    Raises:
+        HTTPException: 429 if rate limit exceeded
+        HTTPException: 400 if request format is invalid
+        HTTPException: 500 if AI service fails
+    """
+    # Rate limiting
+    client_ip = request.client.host
+    if not check_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "Rate limit exceeded",
+                "message": f"Maximum {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds",
+                "suggestion": "Please wait a moment before trying again"
+            }
+        )
+    
+    # Validate conversation history format
+    for i, msg in enumerate(chat_request.conversationHistory):
+        if msg.role not in ["user", "assistant"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid conversation history",
+                    "message": f"Message {i} has invalid role '{msg.role}'. Must be 'user' or 'assistant'",
+                    "suggestion": "Check your conversationHistory format"
+                }
+            )
+    
+    # Validate last message is from user
+    if not chat_request.conversationHistory or chat_request.conversationHistory[-1].role != "user":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid conversation history",
+                "message": "The last message in conversationHistory must be from the user",
+                "suggestion": "Append the new user message to the conversation history before sending"
+            }
+        )
+    
+    # Get the user's message from the last item in history
+    user_message = chat_request.conversationHistory[-1].content
+    logger.info(f"Maintenance chat from {client_ip}: '{user_message[:50]}...'")
+    logger.info(f"Conversation history: {len(chat_request.conversationHistory)} messages")
+    
+    try:
+        # Process chat request
+        openrouter_client = OpenRouterClient()
+        result = openrouter_client.maintenance_chat(
+            conversation_history=chat_request.conversationHistory
+        )
+        
+        logger.info(f"Chat response: suggestTicket={result.suggestTicket}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in maintenance chat: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Chat service error",
+                "message": "Unable to process your message",
+                "suggestion": "Please try again or contact support"
+            }
+        )
 
 
 @app.post("/analyze/duckduckgo", response_model=AnalysisResult)

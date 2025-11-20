@@ -272,3 +272,47 @@ class MaintenanceWorkflow(BaseModel):
     # Additional context
     estimated_timeline: Optional[str] = None  # Timeline for repair if approved
     alternative_action: Optional[str] = None  # What tenant should do if rejected
+
+
+class ChatMessage(BaseModel):
+    """Single message in maintenance chat conversation"""
+    role: str = Field(..., description="'user' or 'assistant'")
+    content: str = Field(..., description="Message content")
+
+
+class MaintenanceChatRequest(BaseModel):
+    """Request for maintenance assistant chatbot"""
+    conversationHistory: List[ChatMessage] = Field(
+        ...,
+        min_length=1,
+        description="Full conversation history including the new user message (oldest first). The last message must be from the user."
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "conversationHistory": [
+                    {"role": "assistant", "content": "Hello! I'm here to help with your maintenance issue. What seems to be the problem?"},
+                    {"role": "user", "content": "my shower has low water pressure"},
+                    {"role": "assistant", "content": "Let's troubleshoot this. Is the shower head removable, or is it fixed to the pipe?"},
+                    {"role": "user", "content": "it's fixed"}
+                ]
+            }
+        }
+
+
+class MaintenanceChatResponse(BaseModel):
+    """Response from maintenance assistant chatbot"""
+    response: str = Field(..., description="AI assistant's contextually aware response")
+    suggestTicket: bool = Field(
+        default=False,
+        description="True if issue needs professional attention and should create ticket"
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "response": "Let's troubleshoot this. Is the shower head removable, or is it fixed to the pipe?",
+                "suggestTicket": False
+            }
+        }

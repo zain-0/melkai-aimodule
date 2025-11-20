@@ -19,7 +19,9 @@ from app.models import (
     VendorWorkOrder,
     TenantMessageRewrite,
     MoveOutResponse,
-    MaintenanceWorkflow
+    MaintenanceWorkflow,
+    ChatMessage,
+    MaintenanceChatResponse
 )
 from app.exceptions import AITimeoutError, AIModelError
 
@@ -946,7 +948,7 @@ IMPORTANT:
         Returns:
             MaintenanceResponse with decision (approved/rejected) and lease-based justification
         """
-        model_name = "meta-llama/llama-3.3-8b-instruct:free"
+        model_name = settings.FREE_MODEL
         
         try:
             # Build maintenance evaluation prompt
@@ -1201,7 +1203,7 @@ Examples:
         Returns:
             VendorWorkOrder with detailed instructions for vendor
         """
-        model_name = "meta-llama/llama-3.3-8b-instruct:free"
+        model_name = settings.FREE_MODEL
         
         try:
             # Build vendor work order prompt
@@ -1442,7 +1444,7 @@ Rules:
         """
         from app.models import MaintenanceWorkflow, VendorWorkOrder
         
-        model_name = "meta-llama/llama-3.3-8b-instruct:free"
+        model_name = settings.FREE_MODEL
         
         try:
             # Build combined workflow prompt
@@ -1729,7 +1731,7 @@ NOW PROCESS THE MAINTENANCE REQUEST ABOVE AND RETURN ONLY THE JSON:
         """
         from app.models import TenantMessageRewrite
         
-        model_name = "meta-llama/llama-3.3-8b-instruct:free"
+        model_name = settings.FREE_MODEL
         
         try:
             # Build tenant message rewrite prompt
@@ -1951,7 +1953,7 @@ Rules:
         Returns:
             MoveOutResponse with notice validation, financial obligations, and next steps
         """
-        model_name = "meta-llama/llama-3.3-8b-instruct:free"
+        model_name = settings.FREE_MODEL
         
         try:
             # Build move-out evaluation prompt
@@ -2317,6 +2319,215 @@ CRITICAL REMINDERS:
                 lease_clauses_cited=[],
                 next_steps=[f"Error processing request - will respond manually within 2 business days"]
             )
+
+
+    @retry_on_api_error
+    def maintenance_chat(
+        self,
+        conversation_history: List[ChatMessage]
+    ) -> MaintenanceChatResponse:
+        """
+        Handle maintenance assistant chatbot conversation with context awareness
+        
+        Args:
+            conversation_history: Full conversation history including the new user message
+            
+        Returns:
+            MaintenanceChatResponse with AI response and ticket suggestion flag
+        """
+        start_time = time.time()
+        
+        try:
+            # Validate that last message is from user
+            if not conversation_history or conversation_history[-1].role != "user":
+                raise ValueError("Last message in conversation history must be from user")
+            
+            # Safety pre-filter: detect emergency/hazardous keywords
+            user_message = conversation_history[-1].content.lower()
+            
+            # Emergency keywords that trigger immediate escalation
+            emergency_keywords = [
+                "smell gas", "gas leak", "rotten egg smell", "gas smell",
+                "smell smoke", "see smoke", "sparks", "burning smell", "smoke detector",
+                "fire alarm", "co detector", "carbon monoxide",
+                "flooding", "water pouring", "ceiling bulging", "ceiling sagging",
+                "exposed wire", "outlet hot", "outlet burning", "outlet spark",
+                "no heat", "no ac", "locked out", "can't close door", "door won't lock",
+                "front door", "exterior door", "window broken", "window won't close"
+            ]
+            
+            # Check if user message contains emergency keywords
+            has_emergency = any(keyword in user_message for keyword in emergency_keywords)
+            
+            if has_emergency:
+                # Return immediate emergency response without AI call
+                logger.warning(f"Emergency keyword detected in maintenance chat: {user_message[:100]}")
+                return MaintenanceChatResponse(
+                    response="This could be an emergency. If you smell gas, see or smell smoke, see sparks, or feel unsafe, please call 911 or your local emergency number immediately. After that, please contact your property's emergency maintenance line. I can help you submit an urgent maintenance request.",
+                    suggestTicket=True
+                )
+            
+            # Build system prompt for maintenance assistant
+            system_prompt = """# Role & Purpose
+You are the Maintenance Assistant inside the MELK property management application.
+Your job is to:
+- Help residents describe their maintenance issue clearly.
+- Offer only simple, low-risk tips they can safely try.
+- Decide when to stop giving tips and instead escalate to maintenance or emergency services.
+
+# Absolute Safety Rules (Non-Negotiable)
+Your highest priority is safety. You must:
+
+**NEVER provide advice that involves:**
+- Working with gas, wiring, electrical panels, outlets, or circuit breakers
+- Opening or disassembling appliances, heaters/furnaces, water heaters, plumbing, walls, ceilings, or floors
+- Using tools (screwdrivers, wrenches, drills, etc.) or ladders/step stools
+- Using strong chemical drain cleaners or other hazardous chemicals
+- Bypassing, disabling, or ignoring smoke/CO detectors or other safety devices
+- Forcing doors or windows, tampering with locks, or bypassing building security
+
+**Never give medical, legal, or insurance advice.** Do not tell people whether they should or should not call police, doctors, or insurers.
+
+**When in doubt about safety, do not suggest any fix.** Instead, recommend contacting maintenance or emergency services.
+
+# Emergencies & Urgent Hazards
+If the user describes anything that sounds like:
+- Smelling gas or a "rotten egg" smell
+- Smelling smoke, seeing smoke, sparks, or burning smells
+- Flooding, water pouring from ceilings/walls, or a bulging/sagging ceiling
+- Exposed wires, outlets that are hot, burning, or buzzing
+- Fire alarms or CO detectors going off (or clearly malfunctioning)
+- No heat in very cold weather or no AC in extreme heat (risk to health)
+- Being locked out or unable to secure an exterior door or window
+- Any situation where someone might be in immediate danger
+
+**Then you must:**
+1. Stop giving troubleshooting tips.
+2. Respond with clear emergency guidance:
+   "This could be an emergency. If you smell gas, see or smell smoke, see sparks, or feel unsafe, please call 911 or your local emergency number immediately. After that, please contact your property's emergency maintenance line. I can also help you mark this as urgent in a maintenance request."
+3. Set suggestTicket to true.
+
+# Allowed Types of Suggestions (Low-Risk Only)
+You may suggest only simple, user-level actions like:
+
+**Check basic settings:**
+- Thermostat mode (Heat/Cool/Off) and temperature
+- That an appliance is plugged in and the door is fully closed
+- That vents or radiators are not blocked by furniture
+
+**Clean or remove obvious debris from safe, exposed areas:**
+- Wiping visible dust from vents or thermostat covers
+- Removing hair or soap scum from the top of a drain cover or stopper (no tools, no chemicals)
+- Gently wiping scuffs on walls with a damp soft cloth
+
+**Confirm simple substitutions:**
+- Try a light bulb that they already know works in that fixture
+- Try a different small device in an outlet to check if the outlet might not be working
+
+**Contain a minor issue:**
+- Place a towel or bucket under a slow drip and report it
+
+**Document & report:**
+- For noise/neighbors or recurring issues, suggest noting times/dates and contacting management through the portal
+
+You must keep suggestions short, simple, and optional. Never pressure the user to attempt anything that feels unsafe or uncomfortable.
+
+# Escalation to Maintenance (Non-Emergency)
+For anything beyond basic checks and cleaning, your job is to:
+- Help them describe the problem clearly (what, where, how long, any photos).
+- Suggest an appropriate priority (routine vs. urgent, not emergency) based on their description.
+- Tell them: "This is better handled by our maintenance team. I'll help you submit a request."
+- Set suggestTicket to true.
+
+# Tone & Boundaries
+- Be calm, polite, and reassuring.
+- Keep responses to 2-4 sentences maximum.
+- Do not guess about building policies; if unknown, say that management will review it.
+- Do not promise specific repair times or outcomes. Say "maintenance team" or "property management will review your request."
+- If you are unsure whether a suggestion is safe: Do not provide the suggestion. Instead, recommend contacting maintenance and/or emergency services.
+
+# Response Format
+Respond in JSON format:
+{
+  "response": "your helpful response here",
+  "suggestTicket": false
+}
+
+Set suggestTicket to true when:
+- Any emergency or hazardous situation is detected
+- Professional help is clearly needed
+- After 3-4 exchanges without resolution
+- User has tried simple suggestions but issue persists"""
+
+            # Build messages array with system prompt and conversation history
+            messages = [{"role": "system", "content": system_prompt}]
+            
+            # Add full conversation history (includes new user message)
+            for msg in conversation_history:
+                messages.append({
+                    "role": msg.role,
+                    "content": msg.content
+                })
+            
+            logger.info(f"Maintenance chat request with {len(conversation_history)} messages")
+            
+            # Call OpenRouter API
+            response = self.client.chat.completions.create(
+                model=settings.FREE_MODEL,  # Using Llama 3.3 8B (free)
+                messages=messages,
+                temperature=0.7,
+                max_tokens=500  # Keep responses concise
+            )
+            
+            response_text = response.choices[0].message.content.strip()
+            elapsed_time = time.time() - start_time
+            
+            logger.info(f"Maintenance chat response received in {elapsed_time:.2f}s")
+            logger.debug(f"Raw response: {response_text[:200]}...")
+            
+            # Parse JSON response
+            try:
+                # Try to extract JSON from markdown if present
+                json_str = self._extract_json_from_markdown(response_text)
+                if not json_str:
+                    json_str = response_text
+                
+                # Sanitize and parse
+                json_str = self._sanitize_json_string(json_str)
+                parsed = json.loads(json_str)
+                
+                return MaintenanceChatResponse(
+                    response=parsed.get("response", response_text),
+                    suggestTicket=parsed.get("suggestTicket", False)
+                )
+                
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON parse failed, using raw response: {e}")
+                # Fallback: return raw response, check if it mentions creating ticket
+                suggest_ticket = any(phrase in response_text.lower() for phrase in [
+                    "create a maintenance ticket",
+                    "create a ticket",
+                    "professional attention",
+                    "needs a professional",
+                    "call maintenance"
+                ])
+                
+                return MaintenanceChatResponse(
+                    response=response_text,
+                    suggestTicket=suggest_ticket
+                )
+        
+        except httpx.TimeoutException:
+            logger.error("Maintenance chat request timed out")
+            raise AITimeoutError(timeout_seconds=30)
+        
+        except Exception as e:
+            logger.error(f"Error in maintenance chat: {str(e)}")
+            raise AIModelError(
+                message="Failed to process chat message",
+                details=str(e)
+            )
+
 
 
 
