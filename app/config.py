@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     # OpenRouter Configuration
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     FREE_MODEL: str = "google/gemini-2.0-flash-001"
+    LEASE_GENERATOR_MODEL: str = "anthropic/claude-3.5-sonnet"
     
     # Models to test - ONLY models with web search capabilities
     # Models without web search have been removed

@@ -316,3 +316,192 @@ class MaintenanceChatResponse(BaseModel):
                 "suggestTicket": False
             }
         }
+
+
+# ============================================================================
+# LEASE GENERATOR MODELS
+# ============================================================================
+
+# Address Models
+class LeaseAddress(BaseModel):
+    """Address for lease property"""
+    street: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip: Optional[str] = None
+
+
+# Property Models
+class UnitDetails(BaseModel):
+    """Unit details for lease property"""
+    unit_number: Optional[str] = None
+    size_sq_ft: Optional[float] = None
+    bedrooms: Optional[int] = None
+    bathrooms: Optional[float] = None
+
+
+class PropertyDetails(BaseModel):
+    """Property details for lease"""
+    name: Optional[str] = None
+    address: LeaseAddress
+    unit_details: Optional[UnitDetails] = None
+
+
+# Party Models
+class LeaseTenant(BaseModel):
+    """Tenant information for lease"""
+    full_name: str
+
+
+class LeaseParties(BaseModel):
+    """Parties involved in lease"""
+    landlord_entity: str
+    tenants: List[LeaseTenant]
+
+
+# Lease Terms Models
+class LeaseTermsDetails(BaseModel):
+    """Lease term details"""
+    planned_term_summary: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    length_description: Optional[str] = None
+    move_in_date: Optional[str] = None
+    renewal_options: Optional[str] = None
+    renewal_rent_increase_terms: Optional[str] = None
+
+
+# Financial Models
+class BaseRent(BaseModel):
+    """Base rent information"""
+    amount: Optional[float] = None
+    grace_period_days: Optional[int] = None
+
+
+class LateFees(BaseModel):
+    """
+    Late fee structure:
+    - type: Description of late fee
+    - amount: If fixed, dollar value; if percentage, the percentage (e.g., 5.0 for 5%)
+    - is_percentage: True if amount represents a percentage of base rent
+    """
+    type: Optional[str] = None
+    amount: Optional[float] = None
+    is_percentage: Optional[bool] = False
+
+
+class OtherDeposit(BaseModel):
+    """Other deposit information"""
+    label: Optional[str] = None
+    amount: Optional[float] = None
+
+
+class Deposits(BaseModel):
+    """Deposit information"""
+    security_deposit_amount: Optional[float] = None
+    other_deposits: Optional[List[OtherDeposit]] = []
+
+
+class Financials(BaseModel):
+    """Financial terms for lease"""
+    base_rent: BaseRent
+    late_fees: Optional[LateFees] = None
+    deposits: Optional[Deposits] = None
+
+
+# Responsibility Models
+class Utility(BaseModel):
+    """
+    Utility payment structure:
+    - Percentage: responsible_party pays X% of actual utility bill
+    - Fixed/Amount: responsible_party pays a fixed dollar amount
+    """
+    utility_name: Optional[str] = None
+    responsible_party: Optional[str] = Field(None, pattern="^(tenant|owner|landlord)$")
+    calculation_method: Optional[str] = Field(None, pattern="^(percentage|amount|fixed)$")
+    percentage_value: Optional[float] = None
+    fixed_amount: Optional[float] = None
+    frequency: Optional[str] = None
+
+
+class CommonAreaMaintenance(BaseModel):
+    """
+    CAM payment structure:
+    - Percentage: responsible_party pays X% of actual CAM costs
+    - Fixed/Amount: responsible_party pays a fixed dollar amount
+    """
+    area_name: Optional[str] = None
+    responsible_party: Optional[str] = Field(None, pattern="^(tenant|owner|landlord)$")
+    calculation_method: Optional[str] = Field(None, pattern="^(percentage|amount|fixed)$")
+    percentage_value: Optional[float] = None
+    fixed_amount: Optional[float] = None
+    frequency: Optional[str] = None
+
+
+class AdditionalFee(BaseModel):
+    """
+    Additional fee structure:
+    - Percentage: responsible_party pays X% of actual costs
+    - Fixed/Amount: responsible_party pays a fixed dollar amount
+    """
+    fee_name: Optional[str] = None
+    responsible_party: Optional[str] = Field(None, pattern="^(tenant|owner|landlord)$")
+    calculation_method: Optional[str] = Field(None, pattern="^(percentage|amount|fixed)$")
+    percentage_value: Optional[float] = None
+    fixed_amount: Optional[float] = None
+    frequency: Optional[str] = None
+
+
+class Responsibilities(BaseModel):
+    """Responsibility details for lease"""
+    utilities: Optional[List[Utility]] = []
+    common_area_maintenance: Optional[List[CommonAreaMaintenance]] = []
+    additional_fees: Optional[List[AdditionalFee]] = []
+
+
+# Legal Terms Models
+class LegalAndSpecialTerms(BaseModel):
+    """Legal and special terms for lease"""
+    special_clauses: Optional[str] = None
+
+
+# Metadata Model
+class LeaseMetadata(BaseModel):
+    """Metadata for lease generation"""
+    lease_type: str = Field(..., pattern="^(Commercial|Residential)$")
+
+
+# Main Request Model
+class LeaseGenerationRequest(BaseModel):
+    """Complete lease generation request"""
+    metadata: LeaseMetadata
+    property_details: PropertyDetails
+    parties: LeaseParties
+    lease_terms: LeaseTermsDetails
+    financials: Financials
+    responsibilities: Optional[Responsibilities] = None
+    legal_and_special_terms: Optional[LegalAndSpecialTerms] = None
+
+
+class LeaseGenerationRequestWrapper(BaseModel):
+    """Wrapper for lease generation request"""
+    lease_generation_request: LeaseGenerationRequest
+
+
+# Response Models
+class LegalResearchResult(BaseModel):
+    """Legal research results"""
+    jurisdiction: str
+    laws_checked: List[str]
+    sources: List[str]
+    compliance_notes: List[str]
+
+
+class LeaseGenerationResponse(BaseModel):
+    """Response from lease generation"""
+    success: bool
+    lease_document: str
+    word_count: int
+    metadata: dict
+    legal_research: LegalResearchResult
+    warnings: Optional[List[str]] = []

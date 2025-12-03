@@ -19,10 +19,13 @@ from app.models import (
     MoveOutResponse,
     MaintenanceWorkflow,
     MaintenanceChatRequest,
-    MaintenanceChatResponse
+    MaintenanceChatResponse,
+    LeaseGenerationRequestWrapper,
+    LeaseGenerationResponse
 )
 from app.analyzer import LeaseAnalyzer
 from app.openrouter_client import OpenRouterClient
+from app.lease_generator import LegalResearchService, LeaseGenerationService
 from app.config import settings
 
 # Enums for dropdown selections in Swagger UI
@@ -128,6 +131,10 @@ async def api_exception_handler(request, exc: APIException):
 # Initialize analyzer
 analyzer = LeaseAnalyzer()
 
+# Initialize lease generator services
+legal_research_service = LegalResearchService()
+lease_generation_service = LeaseGenerationService()
+
 # Rate limiting storage (in-memory for simplicity)
 # For production, use Redis or similar
 rate_limit_storage = defaultdict(list)
@@ -180,6 +187,7 @@ async def root():
             "maintenance_workflow": "/maintenance/workflow",
             "maintenance_chat": "/tenant/chat",
             "tenant_rewrite": "/tenant/rewrite",
+            "lease_generate": "/lease/generate",
             "docs": "/docs"
         }
     }
@@ -1210,6 +1218,111 @@ async def list_providers():
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "Lease Violation Analyzer"}
+
+
+@app.post("/lease/generate", response_model=LeaseGenerationResponse)
+async def generate_lease(
+    request: Request,
+    lease_request: LeaseGenerationRequestWrapper = Body(...)
+):
+    """
+    Generate a comprehensive lease agreement with legal research
+    
+    This endpoint:
+    1. Validates the lease request data
+    2. Performs jurisdiction-specific legal research
+    3. Generates a complete lease document using Claude 3.5 Sonnet
+    4. Returns the document with metadata and compliance information
+    
+    Args:
+        lease_request: Complete lease generation request with all required details
+        
+    Returns:
+        LeaseGenerationResponse with generated document, word count, and legal research
+        
+    Raises:
+        HTTPException: For validation errors or generation failures
+    """
+    try:
+        # Check rate limit
+        client_ip = request.client.host if request.client else "unknown"
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. Please try again later."
+            )
+        
+        logger.info(f"Generating lease for property: {lease_request.lease_generation_request.property_details.name}")
+        
+        # Validate request data and collect warnings
+        warnings = []
+        req_data = lease_request.lease_generation_request
+        
+        # Check for missing or invalid data
+        if not req_data.property_details.address.city:
+            warnings.append("City not provided - using state laws only")
+        
+        if not req_data.property_details.address.state or req_data.property_details.address.state.upper() == "USA":
+            warnings.append("Invalid state - defaulting to California laws")
+            req_data.property_details.address.state = "California"
+        
+        if not req_data.financials.base_rent.amount or req_data.financials.base_rent.amount <= 0:
+            warnings.append("Base rent amount not specified")
+        
+        if not req_data.lease_terms.start_date and not req_data.lease_terms.planned_term_summary:
+            warnings.append("Lease start date not clearly specified")
+        
+        if not req_data.parties.tenants or len(req_data.parties.tenants) == 0:
+            warnings.append("No tenants specified")
+        
+        # Perform legal research
+        logger.info(f"Performing legal research for {req_data.property_details.address.city}, {req_data.property_details.address.state}")
+        legal_research_dict = await legal_research_service.research_jurisdiction_laws(
+            city=req_data.property_details.address.city or "Unknown",
+            state=req_data.property_details.address.state,
+            lease_type=req_data.metadata.lease_type
+        )
+        
+        # Generate the lease document
+        logger.info("Generating lease document with Claude 3.5 Sonnet")
+        lease_document = await lease_generation_service.generate_lease(
+            request=req_data,
+            legal_research=legal_research_dict
+        )
+        
+        # Calculate word count
+        word_count = len(lease_document.split())
+        logger.info(f"Generated lease document with {word_count} words")
+        
+        # Build response
+        response = LeaseGenerationResponse(
+            success=True,
+            lease_document=lease_document,
+            word_count=word_count,
+            metadata={
+                "lease_type": req_data.metadata.lease_type,
+                "property_name": req_data.property_details.name,
+                "property_address": f"{req_data.property_details.address.street}, {req_data.property_details.address.city}, {req_data.property_details.address.state} {req_data.property_details.address.zip}",
+                "start_date": req_data.lease_terms.start_date,
+                "end_date": req_data.lease_terms.end_date,
+                "monthly_rent": req_data.financials.base_rent.amount,
+                "model_used": settings.LEASE_GENERATOR_MODEL,
+                "generated_at": datetime.now().isoformat()
+            },
+            legal_research=legal_research_dict,
+            warnings=warnings if warnings else None
+        )
+        
+        return response
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating lease: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate lease: {str(e)}"
+        )
 
 
 if __name__ == "__main__":
