@@ -5,7 +5,16 @@ Provides services for generating professional lease documents with legal researc
 
 from typing import Dict, List, Optional
 from datetime import datetime
-from openai import OpenAI
+import boto3
+import json
+import logging
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
+from io import BytesIO
+import base64
 from app.config import settings
 from app.models import (
     LeaseGenerationRequest,
@@ -214,14 +223,31 @@ class LegalResearchService:
 # ============================================================================
 
 class LeaseGenerationService:
-    """Service to generate professional legal lease documents using OpenRouter"""
+    """Service to generate professional legal lease documents using AWS Bedrock"""
     
     def __init__(self):
-        self.client = OpenAI(
-            base_url=settings.OPENROUTER_BASE_URL,
-            api_key=settings.OPENROUTER_API_KEY,
-        )
-        self.model = settings.LEASE_GENERATOR_MODEL
+        # Initialize Bedrock client
+        try:
+            session_kwargs = {'region_name': settings.AWS_REGION}
+            
+            if settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY:
+                session_kwargs['aws_access_key_id'] = settings.AWS_ACCESS_KEY_ID
+                session_kwargs['aws_secret_access_key'] = settings.AWS_SECRET_ACCESS_KEY
+            
+            session = boto3.Session(**session_kwargs)
+            self.client = session.client(
+                service_name='bedrock-runtime',
+                config=boto3.session.Config(
+                    read_timeout=120,
+                    connect_timeout=10,
+                    retries={'max_attempts': 3, 'mode': 'adaptive'}
+                )
+            )
+            self.model = settings.LEASE_GENERATOR_MODEL
+            logger.info(f"Lease generator initialized with model: {self.model}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Bedrock client: {str(e)}")
+            raise Exception(f"Failed to initialize AWS Bedrock client: {str(e)}")
     
     async def generate_lease(
         self,
@@ -229,42 +255,436 @@ class LeaseGenerationService:
         legal_research: Dict
     ) -> str:
         """
-        Generate a comprehensive legal lease document in HTML format.
+        Generate a comprehensive legal lease document in plain text format.
         
         Args:
             request: The lease generation request data
             legal_research: Results from legal research including jurisdiction laws
             
         Returns:
-            Formatted lease document as HTML string
+            Formatted lease document as plain text string
         """
         # Build comprehensive prompt
         prompt = self._build_lease_prompt(request, legal_research)
         
-        # Call OpenRouter API
+        # Call AWS Bedrock API
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": self._get_system_prompt()
-                    },
+            # Format request body for Claude on Bedrock
+            body = json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 16000,  # Increased for complete lease generation with full details
+                "temperature": 0.3,
+                "system": self._get_system_prompt(),
+                "messages": [
                     {
                         "role": "user",
                         "content": prompt
                     }
-                ],
-                temperature=0.3,
-                max_tokens=8000,
+                ]
+            })
+            
+            # Invoke Bedrock model
+            response = self.client.invoke_model(
+                modelId=self.model,
+                body=body
             )
             
-            lease_document = response.choices[0].message.content
+            # Parse response
+            response_body = json.loads(response['body'].read())
+            lease_document = response_body['content'][0]['text']
+            
             return lease_document
             
         except Exception as e:
             logger.error(f"Failed to generate lease document: {str(e)}")
             raise Exception(f"Failed to generate lease document: {str(e)}")
+    
+    def convert_to_pdf(self, text_content: str, property_name: str = "Lease") -> bytes:
+        """
+        Convert plain text lease document to PDF format.
+        
+        Args:
+            text_content: The plain text lease document
+            property_name: Name of property for filename purposes
+            
+        Returns:
+            PDF file content as bytes
+        """
+        try:
+            # Create a BytesIO buffer
+            buffer = BytesIO()
+            
+            # Create the PDF document
+            doc = SimpleDocTemplate(
+                buffer,
+                pagesize=letter,
+                rightMargin=0.75*inch,
+                leftMargin=0.75*inch,
+                topMargin=0.75*inch,
+                bottomMargin=0.75*inch
+            )
+            
+            # Define styles
+            styles = getSampleStyleSheet()
+            
+            # Custom title style (centered, larger)
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=14,
+                alignment=TA_CENTER,
+                spaceAfter=12,
+                fontName='Times-Bold'
+            )
+            
+            # Custom numbered heading style (for main sections like "1. PARTIES:")
+            numbered_heading_style = ParagraphStyle(
+                'NumberedHeading',
+                parent=styles['Normal'],
+                fontSize=11,
+                alignment=TA_LEFT,
+                spaceAfter=6,
+                spaceBefore=8,
+                fontName='Times-Bold',
+                leading=13
+            )
+            
+            # Custom body style (regular text)
+            body_style = ParagraphStyle(
+                'CustomBody',
+                parent=styles['BodyText'],
+                fontSize=11,
+                alignment=TA_LEFT,
+                spaceAfter=6,
+                fontName='Times-Roman',
+                leading=13
+            )
+            
+            # Section keywords that indicate a major section heading
+            # These should ONLY match the actual header line, not body paragraphs
+            section_keywords = [
+                'PARTIES:', 'TENANT(S):', 'PROPERTY ADDRESS:', 'RENTAL AMOUNT:', 
+                'TERM:', 'SECURITY DEPOSITS:', 'SECURITY DEPOSIT:', 'INITIAL PAYMENT:', 
+                'OCCUPANTS:', 'SUBLETTING OR ASSIGNING:', 'SUBLETTING:', 
+                'UTILITIES:', 'PARKING:', 'CONDITION OF THE PREMISES:', 
+                'ALTERATIONS:', 'LATE CHARGE', 'NOISE AND DISRUPTIVE', 
+                "LANDLORD'S RIGHT OF ENTRY:", "LANDLORD'S RIGHT", 
+                'REPAIRS BY LANDLORD:', 'REPAIRS:', 'PETS:', 'FURNISHINGS:', 
+                'INSURANCE:', 'TERMINATION OF LEASE', 'TERMINATION:', 
+                'POSSESSION:', 'ABANDONMENT:', 'WAIVER:', 'VALIDITY', 
+                'NOTICES:', 'PERSONAL PROPERTY OF TENANT:', 'PERSONAL PROPERTY:', 
+                'APPLICATION:', 'NEIGHBORHOOD CONDITIONS:', 'NEIGHBORHOOD:', 
+                'DATA BASE DISCLOSURE:', 'DATABASE DISCLOSURE:', 'DATABASE:', 
+                'KEYS:', 'PROPERTY CONDITION LIST:', 'PROPERTY CONDITION:', 
+                'SATELLITE DISHES:', 'SATELLITE:', 'ATTORNEY FEES:', 'ATTORNEY:', 
+                'ENTIRE AGREEMENT:', 'SIGNATURES'
+            ]
+            
+            # Build the document content
+            story = []
+            lines = text_content.split('\n')
+            section_number = 0
+            in_signature_section = False
+            
+            for i, line in enumerate(lines):
+                line = line.strip()
+                
+                if not line:
+                    # Empty line - add small spacer
+                    story.append(Spacer(1, 0.08*inch))
+                    continue
+                
+                # Check if it's the main title
+                if ('RESIDENTIAL LEASE' in line.upper() or 'COMMERCIAL LEASE' in line.upper()) and 'AGREEMENT' in line.upper() and i < 5:
+                    story.append(Paragraph(line, title_style))
+                    story.append(Spacer(1, 0.15*inch))
+                    continue
+                
+                # Check if we're entering signature section
+                if line.upper() == 'SIGNATURES' or (line.upper().startswith('SIGNATURE') and ':' not in line):
+                    in_signature_section = True
+                    section_number += 1
+                    formatted_line = f"<b>{section_number}. {line}</b>"
+                    story.append(Paragraph(formatted_line, numbered_heading_style))
+                    continue
+                
+                # Check if it's a major section heading
+                is_section_header = False
+                line_upper = line.upper()
+                
+                # Check if line starts with any section keyword
+                # Don't require length check if it's clearly a section header with a colon
+                has_colon = ':' in line[:80]  # Colon in first 80 chars suggests it's a header
+                
+                for keyword in section_keywords:
+                    if line_upper.startswith(keyword):
+                        # If it has a colon early on, it's likely a header regardless of length
+                        # Otherwise, require it to be under 250 chars
+                        if has_colon or len(line) < 250:
+                            is_section_header = True
+                            break
+                
+                if is_section_header and not in_signature_section:
+                    # This is a major section - add numbering and bold
+                    section_number += 1
+                    
+                    # Extract just the bold part (usually the part before the colon + some text)
+                    if ':' in line:
+                        # Find the colon position
+                        colon_pos = line.find(':')
+                        bold_part = line[:colon_pos + 1]  # Include the colon
+                        rest = line[colon_pos + 1:].strip()  # Everything after the colon
+                        
+                        # Escape HTML in rest part only
+                        rest = rest.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        
+                        # Build formatted line with bold tags
+                        if rest:
+                            formatted_line = f"<b>{section_number}. {bold_part}</b> {rest}"
+                        else:
+                            formatted_line = f"<b>{section_number}. {bold_part}</b>"
+                    else:
+                        # Entire line is the heading (no colon)
+                        formatted_line = f"<b>{section_number}. {line}</b>"
+                    
+                    story.append(Paragraph(formatted_line, numbered_heading_style))
+                elif in_signature_section:
+                    # In signature section - check for signature lines
+                    if 'Owner' in line or 'Representative' in line or 'Tenant' in line or 'Date:' in line:
+                        # Make the labels bold but not the underscores
+                        line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        if ':' in line and '_' in line:
+                            parts = line.split(':', 1)
+                            formatted_line = f"<b>{parts[0]}:</b>{parts[1]}"
+                        else:
+                            formatted_line = line
+                        story.append(Paragraph(formatted_line, body_style))
+                    else:
+                        # Regular signature section text
+                        line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        story.append(Paragraph(line, body_style))
+                else:
+                    # Regular body text - no bold
+                    # Escape special characters for reportlab
+                    line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    story.append(Paragraph(line, body_style))
+            
+            # Build the PDF
+            doc.build(story)
+            
+            # Get the PDF content
+            pdf_content = buffer.getvalue()
+            buffer.close()
+            
+            return pdf_content
+            
+        except Exception as e:
+            logger.error(f"Failed to convert lease to PDF: {str(e)}")
+            raise Exception(f"Failed to convert lease to PDF: {str(e)}")
+    
+    def convert_to_html(self, text_content: str, property_name: str = "Lease") -> str:
+        """
+        Convert plain text lease document to HTML format.
+        
+        Args:
+            text_content: The plain text lease document
+            property_name: Name of property for display purposes
+            
+        Returns:
+            Formatted lease document as HTML string
+        """
+        try:
+            # Section keywords that indicate a major section heading
+            # Note: PARTIES, TENANT(S), and PROPERTY ADDRESS are handled specially (no numbering)
+            initial_fields = ['PARTIES:', 'TENANT(S):', 'PROPERTY ADDRESS:']
+            section_keywords = [
+                'RENTAL AMOUNT:', 
+                'TERM:', 'SECURITY DEPOSITS:', 'SECURITY DEPOSIT:', 'INITIAL PAYMENT:', 
+                'OCCUPANTS:', 'SUBLETTING OR ASSIGNING:', 'SUBLETTING:', 
+                'UTILITIES:', 'PARKING:', 'CONDITION OF THE PREMISES:', 
+                'ALTERATIONS:', 'LATE CHARGE', 'NOISE AND DISRUPTIVE', 
+                "LANDLORD'S RIGHT OF ENTRY:", "LANDLORD'S RIGHT", 
+                'REPAIRS BY LANDLORD:', 'REPAIRS:', 'PETS:', 'FURNISHINGS:', 
+                'INSURANCE:', 'TERMINATION OF LEASE', 'TERMINATION:', 
+                'POSSESSION:', 'ABANDONMENT:', 'WAIVER:', 'VALIDITY', 
+                'NOTICES:', 'PERSONAL PROPERTY OF TENANT:', 'PERSONAL PROPERTY:', 
+                'APPLICATION:', 'NEIGHBORHOOD CONDITIONS:', 'NEIGHBORHOOD:', 
+                'DATA BASE DISCLOSURE:', 'DATABASE DISCLOSURE:', 'DATABASE:', 
+                'KEYS:', 'PROPERTY CONDITION LIST:', 'PROPERTY CONDITION:', 
+                'SATELLITE DISHES:', 'SATELLITE:', 'ATTORNEY FEES:', 'ATTORNEY:', 
+                'ENTIRE AGREEMENT:', 'SIGNATURES'
+            ]
+            
+            # Build HTML content
+            html_parts = []
+            
+            # Add CSS styles
+            html_parts.append('''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lease Agreement - ''' + property_name + '''</title>
+    <style>
+        body {
+            font-family: 'Times New Roman', Times, serif;
+            font-size: 11pt;
+            line-height: 1.4;
+            max-width: 8.5in;
+            margin: 0 auto;
+            padding: 0.75in;
+            background-color: #ffffff;
+            color: #000000;
+        }
+        .title {
+            text-align: center;
+            font-size: 14pt;
+            font-weight: bold;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+        }
+        .section-header {
+            font-weight: bold;
+            margin-top: 12px;
+            margin-bottom: 6px;
+            font-size: 11pt;
+        }
+        .body-text {
+            margin-bottom: 6px;
+            text-align: left;
+        }
+        .signature-section {
+            margin-top: 20px;
+        }
+        .signature-label {
+            font-weight: bold;
+        }
+        @media print {
+            body {
+                padding: 0.5in;
+            }
+        }
+    </style>
+</head>
+<body>
+''')
+            
+            # Process content
+            lines = text_content.split('\n')
+            section_number = 0
+            in_signature_section = False
+            
+            for i, line in enumerate(lines):
+                line = line.strip()
+                
+                if not line:
+                    # Empty line
+                    html_parts.append('<br>')
+                    continue
+                
+                # Escape HTML entities
+                line_escaped = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                line_upper = line.upper()
+                
+                # Check if it's the main title
+                if (('RESIDENTIAL LEASE' in line_upper or 'COMMERCIAL LEASE' in line_upper) and i < 5) and \
+                   (line.strip().upper() in ['RESIDENTIAL LEASE', 'COMMERCIAL LEASE'] or 'RENTAL AGREEMENT' in line_upper):
+                    # Extract just RESIDENTIAL LEASE or COMMERCIAL LEASE part
+                    if 'RESIDENTIAL' in line_upper:
+                        html_parts.append('<div class="title">RESIDENTIAL LEASE</div>')
+                    else:
+                        html_parts.append('<div class="title">COMMERCIAL LEASE</div>')
+                    continue
+                
+                # Check if it's one of the initial fields (PARTIES, TENANT(S), PROPERTY ADDRESS)
+                is_initial_field = False
+                for field in initial_fields:
+                    if line_upper.startswith(field):
+                        is_initial_field = True
+                        # Format without numbering - just bold the label
+                        if ':' in line:
+                            colon_pos = line.find(':')
+                            bold_part = line[:colon_pos + 1]
+                            rest = line[colon_pos + 1:].strip()
+                            
+                            bold_part_escaped = bold_part.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                            rest_escaped = rest.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                            
+                            if rest:
+                                html_parts.append(f'<div class="section-header"><strong>{bold_part_escaped}</strong> {rest_escaped}</div>')
+                            else:
+                                html_parts.append(f'<div class="section-header"><strong>{bold_part_escaped}</strong> _____________________________________________________</div>')
+                        break
+                
+                if is_initial_field:
+                    continue
+                
+                # Check if we're entering signature section
+                if line.upper() == 'SIGNATURES' or (line.upper().startswith('SIGNATURE') and ':' not in line):
+                    in_signature_section = True
+                    section_number += 1
+                    html_parts.append(f'<div class="section-header signature-section"><strong>{section_number}. {line_escaped}</strong></div>')
+                    continue
+                
+                # Check if it's a major section heading
+                is_section_header = False
+                line_upper = line.upper()
+                has_colon = ':' in line[:80]
+                
+                for keyword in section_keywords:
+                    if line_upper.startswith(keyword):
+                        if has_colon or len(line) < 250:
+                            is_section_header = True
+                            break
+                
+                if is_section_header and not in_signature_section:
+                    # This is a major section - add numbering and bold
+                    section_number += 1
+                    
+                    if ':' in line:
+                        colon_pos = line.find(':')
+                        bold_part = line[:colon_pos + 1]
+                        rest = line[colon_pos + 1:].strip()
+                        
+                        # Escape both parts
+                        bold_part_escaped = bold_part.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        rest_escaped = rest.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        
+                        if rest:
+                            html_parts.append(f'<div class="section-header"><strong>{section_number}. {bold_part_escaped}</strong> {rest_escaped}</div>')
+                        else:
+                            html_parts.append(f'<div class="section-header"><strong>{section_number}. {bold_part_escaped}</strong></div>')
+                    else:
+                        html_parts.append(f'<div class="section-header"><strong>{section_number}. {line_escaped}</strong></div>')
+                    
+                elif in_signature_section:
+                    # In signature section
+                    if 'Owner' in line or 'Representative' in line or 'Tenant' in line or 'Date:' in line:
+                        if ':' in line and '_' in line:
+                            parts = line.split(':', 1)
+                            label = parts[0].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                            rest = parts[1].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                            html_parts.append(f'<div class="body-text"><span class="signature-label">{label}:</span>{rest}</div>')
+                        else:
+                            html_parts.append(f'<div class="body-text">{line_escaped}</div>')
+                    else:
+                        html_parts.append(f'<div class="body-text">{line_escaped}</div>')
+                else:
+                    # Regular body text
+                    html_parts.append(f'<div class="body-text">{line_escaped}</div>')
+            
+            # Close HTML
+            html_parts.append('''
+</body>
+</html>
+''')
+            
+            return ''.join(html_parts)
+            
+        except Exception as e:
+            logger.error(f"Failed to convert lease to HTML: {str(e)}")
+            raise Exception(f"Failed to convert lease to HTML: {str(e)}")
     
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the AI model"""
@@ -275,129 +695,161 @@ class LeaseGenerationService:
 3. Use clear, unambiguous legal language
 4. Include ALL necessary clauses and provisions without unnecessary verbosity
 5. Protect the interests of both landlord and tenant with balanced rights and obligations
-6. Follow standard legal formatting with numbered sections
+6. Follow the EXACT formatting and structure style of "Updated Lease Agreement.docx" template
 7. Include required legal notices and state-mandated disclosures
 8. Are professional, readable, and suitable for execution
 
-CRITICAL HTML FORMATTING REQUIREMENTS:
-You MUST generate the lease as valid, well-formed HTML5. Follow these rules STRICTLY:
+CRITICAL TEMPLATE REQUIREMENT:
+You MUST follow the exact formatting, structure, section ordering, heading styles, and language patterns found in the "Updated Lease Agreement.docx" template. This includes:
+- The specific heading styles and capitalization used in the template
+- The exact order of sections as they appear in the template
+- The paragraph formatting and spacing used in the template
+- The signature block format from the template
+- The professional legal language style of the template
+- Any special formatting for dates, amounts, and terms used in the template
+
+Treat "Updated Lease Agreement.docx" as your master template and replicate its structure precisely while filling in the specific details provided.
+
+CRITICAL FORMATTING REQUIREMENTS:
+You MUST generate the lease as clean, well-formatted plain text suitable for HTML conversion with automatic section numbering. Follow these rules STRICTLY:
 
 1. **Document Structure:**
-   - Always start with: <!DOCTYPE html>
-   - Include complete <html lang="en"> tag
-   - Include <head> section with:
-     * <meta charset="UTF-8">
-     * <meta name="viewport" content="width=device-width, initial-scale=1.0">
-     * <title>Lease Agreement</title>
-     * Complete <style> section with professional CSS
-   - Include complete <body> section with all content
-   - Close all tags properly: </body></html>
+   - Start with ONLY the title: RESIDENTIAL LEASE (or COMMERCIAL LEASE) - DO NOT include "/RENTAL AGREEMENT"
+   - After the title, immediately add these three fields WITHOUT NUMBERS:
+     * PARTIES: LANDLORD: [Actual landlord name]
+     * TENANT(S): [Actual tenant names]
+     * PROPERTY ADDRESS: [Complete address]
+   - Then start numbered sections beginning with RENTAL AMOUNT:
+   - DO NOT add numbers to section headers - they will be added automatically (e.g., write "RENTAL AMOUNT:" not "1. RENTAL AMOUNT:")
+   - Use clear section headers in ALL CAPS (these will be automatically numbered and bolded)
+   - Use proper line spacing between sections (single blank line between sections)
+   - Format as clean text without HTML tags, markdown, or special formatting codes
+   - Use standard characters only (no special HTML entities)
+   - Professional document layout
 
-2. **CSS Styling (in <style> tag):**
-   ```css
-   body {
-     font-family: 'Times New Roman', Times, serif;
-     line-height: 1.6;
-     max-width: 8.5in;
-     margin: 0 auto;
-     padding: 1in;
-     background: white;
-     color: #000;
-   }
-   h1 {
-     text-align: center;
-     font-size: 24px;
-     margin-bottom: 20px;
-     text-transform: uppercase;
-   }
-   h2 {
-     font-size: 18px;
-     margin-top: 30px;
-     margin-bottom: 15px;
-     border-bottom: 2px solid #000;
-     padding-bottom: 5px;
-   }
-   h3 {
-     font-size: 16px;
-     margin-top: 20px;
-     margin-bottom: 10px;
-   }
-   p {
-     margin: 10px 0;
-     text-align: justify;
-   }
-   ul, ol {
-     margin: 10px 0 10px 30px;
-   }
-   .signature-section {
-     margin-top: 50px;
-     page-break-inside: avoid;
-   }
-   .signature-line {
-     border-top: 1px solid #000;
-     width: 300px;
-     margin-top: 50px;
-     display: inline-block;
-   }
-   .signature-block {
-     margin: 30px 0;
-   }
-   @media print {
-     body { padding: 0.5in; }
-     @page { margin: 0.5in; }
-   }
+2. **Exact Document Start Format:**
+   ```
+   RESIDENTIAL LEASE
+   
+   PARTIES: LANDLORD: ABC Property Management LLC
+   
+   TENANT(S): John Doe and Jane Doe
+   
+   PROPERTY ADDRESS: 123 Main Street, Apartment 4B, Los Angeles, CA 90001
+   
+   RENTAL AMOUNT: Commencing January 1, 2025 TENANTS agree to pay LANDLORD the sum of $2,500 per month...
    ```
 
-3. **Content Structure:**
-   - Use <h1> for document title: "RESIDENTIAL/COMMERCIAL LEASE AGREEMENT"
-   - Use <h2> for major sections (1. PARTIES, 2. PROPERTY, 3. TERM, etc.)
-   - Use <h3> for subsections if needed
-   - Use <p> tags for all paragraph text
-   - Use <strong> for emphasis (amounts, dates, important terms)
-   - Use <ul> or <ol> for lists
-   - Use proper semantic HTML throughout
+3. **Section Headers (Will be automatically numbered starting from RENTAL AMOUNT):**
+   Write section headers WITHOUT numbers. First three (PARTIES, TENANT(S), PROPERTY ADDRESS) will NOT be numbered.
+   Numbered sections start with:
+   - RENTAL AMOUNT: (this becomes 1.)
+   - TERM: (this becomes 2.)
+   - SECURITY DEPOSITS: (this becomes 3.)
+   - INITIAL PAYMENT: (this becomes 4.)
+   - OCCUPANTS: (this becomes 5.)
+   - SUBLETTING OR ASSIGNING:
+   - UTILITIES:
+   - PARKING:
+   - CONDITION OF THE PREMISES:
+   - ALTERATIONS:
+   - LATE CHARGE/BAD CHECKS:
+   - NOISE AND DISRUPTIVE ACTIVITIES:
+   - LANDLORD'S RIGHT OF ENTRY:
+   - REPAIRS BY LANDLORD:
+   - PETS:
+   - FURNISHINGS:
+   - INSURANCE:
+   - TERMINATION OF LEASE/RENTAL AGREEMENT:
+   - POSSESSION:
+   - ABANDONMENT:
+   - WAIVER:
+   - VALIDITY/SEVERABILITY:
+   - NOTICES:
+   - PERSONAL PROPERTY OF TENANT:
+   - Lead-Based Paint Disclosure: (or APPLICATION:)
+   - NEIGHBORHOOD CONDITIONS:
+   - DATABASE DISCLOSURE: (or DATA BASE DISCLOSURE:)
+   - Keys: (or KEYS:)
+   - Property Condition List: (or PROPERTY CONDITION:)
+   - Satellite Dishes: (or SATELLITE:)
+   - ATTORNEY FEES:
+   - ENTIRE AGREEMENT:
+   - SIGNATURES
 
-4. **Signature Section Format:**
-   ```html
-   <div class="signature-section">
-     <h2>SIGNATURES</h2>
-     <div class="signature-block">
-       <p><strong>LANDLORD:</strong></p>
-       <p>[Landlord Name]</p>
-       <div class="signature-line"></div>
-       <p>Signature</p>
-       <div class="signature-line"></div>
-       <p>Date</p>
-     </div>
-     <div class="signature-block">
-       <p><strong>TENANT:</strong></p>
-       <p>[Tenant Name]</p>
-       <div class="signature-line"></div>
-       <p>Signature</p>
-       <div class="signature-line"></div>
-       <p>Date</p>
-     </div>
-   </div>
-   ```
+3. **Text Formatting:**
+   - Use Times New Roman style language (formal, professional)
+   - Main title: Write in ALL CAPS (will be centered automatically)
+   - Section headers: ALL CAPS, followed by content on same or next line
+   - Body text: Regular sentence case, professional spacing
+   - Use line breaks for paragraph separation
+   - Signature lines: Use underscores for signature spaces (e.g., "_______________________________")
+   - Keep consistent formatting throughout
+   - Professional business document style
+   - DO NOT make entire paragraphs bold - only section headers will be bolded automatically
+
+4. **Content Organization:**
+   - One blank line between major sections
+   - Section headers should be on their own line (e.g., "PARTIES: LANDLORD: ABC Property Management LLC")
+   - If content continues after the header, it can be on the same line OR on the next line
+   - Body paragraphs that explain/expand sections should be on separate lines (not continuing from the header)
+   - Example format:
+     ```
+     PARTIES: LANDLORD: ABC Property Management LLC
+     
+     TENANT(S): John Doe and Jane Doe
+     
+     PROPERTY ADDRESS: 123 Main Street, Apartment 4B, Los Angeles, CA 90001
+     
+     RENTAL AMOUNT: Commencing January 1, 2025 TENANTS agree to pay LANDLORD the sum of $2,500 per month for this 2 Bedrooms, 2 Baths Apartment in advance
+     
+     Said rental payment shall be delivered by TENANTS to LANDLORD or their designated agent to the following location: 789 Management Blvd, Los Angeles, CA 90013
+     
+     Rent must be postmarked by the first calendar day of the month.
+     
+     TERM: The premises are leased on the following lease term: One (1) year commencing January 1, 2025 and ending December 31, 2025
+     
+     TENANT has the option to renew for an additional one (1) year term with ninety (90) days written notice.
+     ```
+   - IMPORTANT: Body paragraphs explaining or expanding on a section should start on a NEW LINE (not as part of the header line)
+
+5. **Signature Section Format:**
+   SIGNATURES
+   
+   Owner or Representative: [Actual landlord/agent name]  Date: [Date or _______________]
+   
+   Tenant(s) or authorized Tenant Representative: [Tenant name]  Date: _______________
+   
+   Tenant(s) or authorized Tenant Representative: [Second tenant if applicable]  Date: _______________
+   
+   TENANT:
+   [Tenant Name]
+   
+   Signature: _______________________________  Date: ______________
+   
+   TENANT:
+   [Second Tenant Name if applicable]
+   
+   Signature: _______________________________  Date: ______________
 
 5. **Validation Rules:**
-   - NO unclosed tags - every tag must have a closing tag
-   - NO invalid HTML entities - use proper encoding (&amp; &lt; &gt; etc.)
-   - NO inline styles in HTML - all CSS in <style> section
-   - NO broken nesting - close inner tags before outer tags
-   - NO missing required attributes (lang, charset, viewport)
-   - Use proper HTML5 semantic elements
+   - NO HTML tags or markup
+   - NO markdown formatting (no **, __, ##, etc.)
+   - NO special characters that require encoding
+   - Use standard punctuation and plain text only
+   - Use underscores for blank lines/signature spaces
+   - Professional, clean business document format
 
 6. **Quality Checklist:**
-   ✓ Valid HTML5 structure
-   ✓ All tags properly closed
-   ✓ Professional CSS styling included
-   ✓ Print-ready formatting
-   ✓ Responsive for web viewing
-   ✓ Accessible and semantic markup
-   ✓ Clean, readable code structure
+   ✓ Clean plain text format
+   ✓ No HTML, markdown, or special formatting codes
+   ✓ Professional document layout
+   ✓ Print-ready formatting for PDF
+   ✓ Clear section breaks and spacing
+   ✓ Readable and professional appearance
+   ✓ Properly formatted signature blocks
 
-GENERATE ONLY VALID HTML5 - No markdown, no plain text, no malformed HTML.
+GENERATE ONLY CLEAN PLAIN TEXT - No HTML, no markdown, no special formatting codes.
 
 CRITICAL DOCUMENT COMPLETENESS REQUIREMENTS:
 - Generate the COMPLETE lease agreement in a single response (2-3 pages)
@@ -407,164 +859,212 @@ CRITICAL DOCUMENT COMPLETENESS REQUIREMENTS:
 - Write every section clearly and completely without excessive legal jargon
 - Keep provisions concise while maintaining legal enforceability
 
-=== RESIDENTIAL LEASE TEMPLATE (use for residential properties) ===
+=== TEMPLATE REFERENCE: "Updated Lease Agreement.docx" ===
 
-RESIDENTIAL LEASE AGREEMENT
+You MUST replicate the exact formatting, structure, and style of the "Updated Lease Agreement.docx" template file.
 
-This Residential Lease Agreement (the "Agreement") is made and entered into as of [Date], by and between [Landlord Name] ("Landlord") and [Tenant Name] ("Tenant").
+IMPORTANT: DO NOT add numbers to section headers - they will be added automatically in PDF generation.
 
-1. PREMISES
-Landlord hereby leases to Tenant the residential premises located at [Full Address] (the "Premises").
+EXACT DOCUMENT STRUCTURE FROM TEMPLATE:
 
-2. TERM
-The term of this Agreement shall commence on [Start Date] and continue until [End Date]. [Include renewal options if applicable].
+TITLE: RESIDENTIAL LEASE/RENTAL AGREEMENT
 
-3. RENT
-Tenant shall pay monthly rent of [Amount] due on the [Due Day] of each month via [Payment Method]. Grace period: [X] days. Late fees: [Specify amount or percentage after grace period].
+SECTIONS IN EXACT ORDER (Write without numbers - they're added automatically in PDF):
 
-4. SECURITY DEPOSIT
-Tenant shall deposit [Amount] as security deposit. Deposit will be returned within [State Law Timeline] days after move-out, less any lawful deductions for damages, unpaid rent, or cleaning costs beyond normal wear and tear.
+PARTIES: LANDLORD: [Fill with actual landlord name - e.g., "ABC Property Management LLC"]
 
-5. UTILITIES & SERVICES
-[List each utility and specify who pays - Landlord or Tenant, including any percentage splits or fixed amounts for shared utilities].
+TENANT(S): [Fill with actual tenant names - e.g., "John Doe and Jane Doe"]
 
-6. USE OF PREMISES
-Premises shall be used solely for private residential purposes. Occupancy limited to [Number] persons. Pets: [Allowed/Not Allowed with deposit of $X]. Smoking: [Allowed/Not Allowed].
+PROPERTY ADDRESS: [Fill with complete address - e.g., "123 Main Street, Apartment 4B, Los Angeles, CA 90001"]
 
-7. MAINTENANCE & REPAIRS
-Tenant must keep property clean and in good condition, promptly report maintenance issues, and is responsible for damages caused by negligence or misuse. Landlord will handle major structural repairs and systems (HVAC, plumbing, electrical) unless caused by Tenant's negligence.
+RENTAL AMOUNT: Commencing [actual start date - e.g., "January 1, 2025"] TENANTS agree to pay LANDLORD the sum of [actual amount - e.g., "$2,500"] per month for this [number - e.g., "2"] Bedrooms, [number - e.g., "2"] Baths [property type - e.g., "Apartment"] in advance
 
-8. ALTERATIONS
-Tenant shall not paint, renovate, or alter the property without prior written consent from Landlord.
+Said rental payment shall be delivered by TENANTS to LANDLORD or their designated agent to the following location: [actual payment address or method]
 
-9. ENTRY BY LANDLORD
-Landlord may enter Premises with [State Required Notice] notice for inspections, repairs, or showings, and without notice in emergencies.
+Rent must be postmarked by the first calendar day of the month or received by LANDLORD, or designated agent, in order to be considered in compliance
 
-10. RULES & REGULATIONS
-Tenant agrees to follow all applicable community, HOA, or building rules.
+TERM: The premises are leased on the following lease term: [actual term - e.g., "One (1) year commencing January 1, 2025 and ending December 31, 2025"]
 
-11. DEFAULT AND REMEDIES
-Events of default include: non-payment of rent, violation of lease terms, illegal activity, or damage to property. Landlord remedies include eviction, rent acceleration, and recovery of costs.
+SECURITY DEPOSITS: TENANT shall deposit with landlord the sum of [actual amount - e.g., "$2,500"] as a security deposit to secure TENANT'S faithful performance of the terms of this agreement
 
-12. TERMINATION
-[For fixed-term]: Lease ends on specified date unless renewed. [For month-to-month]: Either party may terminate with [X] days written notice. Early termination: [Specify conditions and fees if applicable]. Tenant must return keys and leave property in clean condition.
+Security deposit cannot be used for last month's rent or any portion of rent in duration of the tenancy
 
-13. ADDITIONAL PROVISIONS
-[Include any state-specific disclosures: lead paint (pre-1978), mold policies, bed bugs, etc.]
-[Include parking, storage, amenity rules if applicable]
-[Include special clauses as needed]
+INITIAL PAYMENT: TENANT shall pay prorated rent from [start date] to [end date] in amount [actual calculated amount]
 
-14. DISPUTE RESOLUTION
-Disputes shall be resolved through [Mediation/Arbitration/Litigation] in [Jurisdiction/Venue]. Prevailing party entitled to attorney's fees.
+[actual breakdown - e.g., "$833.33 and the security deposit in the amount of $2,500 for a total of $3,333.33"] Said payment shall be made in the form of cash or Cashier's check
 
-15. GOVERNING LAW
-This Agreement shall be governed by the laws of the State of [State].
+OCCUPANTS: The premises shall not be occupied by any persons other than those designated above as TENANTS with the exception of the following named persons: [list actual names or write "None"]
 
-16. ENTIRE AGREEMENT
-This Agreement constitutes the entire agreement between parties. Modifications must be in writing and signed by both parties.
+If LANDLORD, with written consent, allows for additional persons to occupy the premises, the rent shall be increased by [actual amount - e.g., "$200"] for each such person
 
-17. SIGNATURES
-LANDLORD: _____________________________ Date: ___________
-[Printed Name]
+SUBLETTING OR ASSIGNING: Tenants agree not to assign or sublet the premises or any part thereof, without first obtaining written permission from Landlord
 
-TENANT: _____________________________ Date: ___________
-[Printed Name]
+[Fill with actual sublease permissions or write "Not permitted" or specific conditions if applicable]
 
-=== COMMERCIAL LEASE TEMPLATE (use for commercial properties) ===
+Both Tenants and sublessees are individually and collectively responsible for all terms and condition of master lease agreement
 
-COMMERCIAL LEASE AGREEMENT
+TENANT(s) under any circumstances are not allowed to sublease the subject premises to "Airbnb"
 
-This Commercial Lease Agreement (the "Agreement") is made and entered into as of [Date], by and between [Landlord Entity] ("Landlord") and [Tenant Entity] ("Tenant").
+UTILITIES: TENANTS shall pay for all utilities and/or services supplied to the premises with the following exception: [list actual exceptions - e.g., "Trash and water" or "None - tenant pays all"]
 
-1. PREMISES
-Landlord leases to Tenant the commercial premises located at [Full Address], consisting of approximately [Square Feet] square feet (the "Premises").
+PARKING: TENANT is assigned parking space [actual number - e.g., "#13" or "None assigned"]. TENANT may only park [actual number - e.g., "2"] vehicle(s). TENANTS may not assign, sublet, or allow any other person to use this parking space
 
-2. TERM
-The term shall commence on [Start Date] and end on [End Date] ([X] years). Renewal Options: [Specify renewal terms and rent increase provisions].
+CONDITION OF THE PREMISES: TENANTS acknowledge that the premises have been inspected. Tenants acknowledge that the said premises have been [actual condition - e.g., "recently remodeled and are in good condition"]
 
-3. RENT AND ADDITIONAL CHARGES
-Base Rent: [Amount] per month, due on the [Due Day] of each month. Grace Period: [X] days. Late Fees: [Amount or Percentage] after grace period.
+ALTERATIONS: TENANTS shall not make any alterations to the premises, including but not limited to installing aerials, lighting fixtures, dishwashers or other items without LANDLORD'S written consent
 
-Additional Rent and Operating Expenses:
-- Common Area Maintenance (CAM): [Specify calculation method - percentage of actual costs, fixed amount, or tenant's pro-rata share]
-- Property Taxes: [Specify pass-through method]
-- Insurance: [Specify pass-through method]
-- Utilities: [List each utility and payment responsibility with calculation method]
-- [Other fees]: [Specify amounts or percentages]
+LATE CHARGE/BAD CHECKS: A late charge of [actual percentage - e.g., "6"] % of the current rental amount shall be incurred if rent is not paid when due. If rent is not paid when due [specify consequences]
 
-Total Estimated Monthly Payment: [Base Rent + Estimated Additional Charges]
+If TENANTS tender a check, which is dishonored by a banking institution, than TENANTS shall only tender cash or cashier's check for all future payments
 
-4. SECURITY DEPOSIT
-Tenant shall deposit [Amount] including: Security Deposit: [Amount], First Month Rent: [Amount], Last Month Rent: [Amount if applicable]. Deposit refund governed by state law within [X] days of lease end.
+NOISE AND DISRUPTIVE ACTIVITIES: THIS IS A NON SMOKING BUILDING therefore TENANTS or their guests and invitees shall not disturb, annoy, endanger or inconvenience other Tenants of the building, neighbors, the LANDLORD or his agents
 
-5. USE OF PREMISES
-Premises shall be used for [Specific Business Purpose] and for no other purpose without Landlord's written consent. Permitted Hours: [Business Hours]. Prohibited Uses: [Specify restrictions].
+LANDLORD'S RIGHT OF ENTRY: LANDLORD may enter and inspect the premises during normal business hours and upon reasonable advance notice of at least [actual hours - e.g., "24"] hours
 
-6. UTILITIES AND SERVICES
-[Detail each utility responsibility, calculation methods, and any shared service arrangements]
+REPAIRS BY LANDLORD: Where a repair is the responsibility of the LANDLORD, TENANTS must notify LANDLORD with a written notice stating what item needs repair
 
-7. MAINTENANCE AND REPAIRS
-Landlord Responsibilities: Structural repairs, roof, exterior walls, common areas, and building systems unless damage caused by Tenant.
-Tenant Responsibilities: Interior maintenance, HVAC servicing, day-to-day repairs, and all damage caused by Tenant's operations.
+As stated in Code of Civil Procedure section 1174.2 All and any repairs needed to be done due to the lack of maintenance by TENANT is the TENANT'S sole responsibility
 
-8. ALTERATIONS AND IMPROVEMENTS
-Tenant may make alterations only with Landlord's prior written consent. Tenant responsible for all costs. [Specify ownership of improvements and restoration requirements upon lease termination].
+Temporary Relocation: Tenants Agree, upon demand of Landlord, to temporarily vacate premises for a reasonable period, to allow for fumigation, or other situations
 
-9. INSURANCE
-Tenant must maintain: Commercial General Liability insurance (minimum [Amount]), Property insurance for Tenant's property, and [Other required coverage]. Landlord must be named as additional insured. Proof of insurance required before occupancy.
+PETS: No dog, cat, bird, fish or other domesticated pet or animal of any kind may be kept on or about the premises without the LANDLORD'S written consent [add actual pet policy - e.g., "Pets not allowed" or "Cats allowed with $500 deposit"]
 
-10. ASSIGNMENT AND SUBLETTING
-Tenant may not assign lease or sublet without Landlord's prior written consent. Any approved assignment does not release Tenant from obligations.
+FURNISHINGS: No liquid filled furniture of any kind may be kept on the premises. If the structure was built in [actual year] or later TENANTS may possess a waterbed [specify conditions if applicable]
 
-11. DEFAULT AND REMEDIES
-Events of Default: Non-payment of rent, breach of lease terms, bankruptcy, abandonment. Landlord Remedies: Termination, eviction, rent acceleration, and recovery of all costs including attorney's fees.
+[actual amount or "N/A"]. TENANTS must furnish LANDLORD with proof of said insurance. TENANTS must use bedding that complies with the capacity of the manufacturer
 
-12. EARLY TERMINATION
-[If applicable: Specify conditions, notice requirements, and fees for early termination]
+INSURANCE: TENANTS may maintain a personal property insurance policy to cover any losses sustained to TENANTS' personal property or vehicle. It is acknowledged that LANDLORD's insurance does not cover TENANT'S possessions
 
-13. ENTRY AND INSPECTION
-Landlord may enter with [State Required] notice for inspections, repairs, or showing to prospective tenants/buyers, and without notice in emergencies.
+TERMINATION OF LEASE/RENTAL AGREEMENT: This is a [actual duration - e.g., "one (1) year"] Lease agreement with [actual renewal terms - e.g., "one year option for the 2nd year with new terms to be negotiated 90 days prior to termination"]
 
-14. SUBORDINATION
-This lease is subordinate to any existing or future mortgages on the property. Tenant agrees to execute estoppel certificates upon request.
+POSSESSION: If premises cannot be delivered to TENANTS on agreed date due to loss, total or partial destruction of the premises, or failure of previous tenant to vacate [specify consequences]
 
-15. NOTICES
-All notices must be in writing and delivered to:
-Landlord: [Address]
-Tenant: [Address]
+ABANDONMENT: It shall be deemed a reasonable belief by the LANDLORD that an abandonment of the premises has occurred [specify conditions per state law]
 
-16. COMPLIANCE WITH LAWS
-Tenant shall comply with all federal, state, and local laws, including ADA requirements, environmental regulations, and building codes.
+WAIVER: Landlord's failure to require compliance with the conditions of this agreement, or to exercise any right provided herein, shall not be deemed a waiver
 
-17. DISPUTE RESOLUTION
-Disputes shall be resolved through [Mediation/Arbitration/Litigation] in [Jurisdiction/Venue]. Prevailing party entitled to attorney's fees and costs.
+VALIDITY/SEVERABILITY: If any provision of this agreement is held to be invalid, such invalidity shall not affect the validity or enforceability of any other part
 
-18. GOVERNING LAW
-This Agreement is governed by the laws of the State of [State].
+NOTICES: All notices to the TENANTS shall be deemed upon mailing by first class mail, addressed to the tenant, at the subject premises or upon personal delivery
 
-19. GENERAL PROVISIONS
-This Agreement constitutes the entire agreement. Amendments must be in writing. If any provision is invalid, the remainder continues in effect. Time is of the essence.
+PERSONAL PROPERTY OF TENANT: Once TENANTS vacate the premises; all personal property left in the unit shall be stored by the LANDLORD for [actual number - e.g., "18"] days
 
-20. STATE-SPECIFIC DISCLOSURES
-[Include all required state and local disclosures and compliance requirements]
+Lead-Based Paint Disclosure: [If pre-1978: "Premises were constructed prior to 1978 may contain lead-based paint. Landlord gives and Tenant acknowledges receipt of 'Lead-Based paint & hazard disclosure'" OR if post-1978: "Not applicable - structure built after 1978"]
 
-21. SIGNATURES
-LANDLORD: _____________________________ Date: ___________
-[Printed Name and Title]
+APPLICATION: All statements in TENANTS' application must be true or this will constitute a material breach of this lease
 
-TENANT: _____________________________ Date: ___________
-[Printed Name and Title]
+NEIGHBORHOOD CONDITIONS: Tenants are advised to satisfy themselves as to neighborhood or area conditions, including schools, proximity and adequacy of law enforcement
+
+DATA BASE DISCLOSURE: Notice: The [actual state - e.g., "California"] Department of Justice, Sheriff's Department, Police Department serving jurisdictions [disclosure information per state]
+
+Keys: Tenants acknowledge receipt of [actual number - e.g., "3"] Sets of Keys to Premises, [number - e.g., "1"] mailbox key, [number - e.g., "3"] key for common area and [number - e.g., "2"] garage door opener
+
+Property Condition List: Tenant(s) will provide landlord a list of items that are damaged or not in operable condition within seven days after commencement date
+
+Satellite Dishes: Landlord does not allow personal Satellite Dishes to be mounted anywhere on the property. No drilling of holes to run wiring
+
+ATTORNEY FEES: In the event action is brought by any party to enforce any terms of this agreement or to recover possession of the premises, the prevailing party shall be entitled to attorney's fees
+
+ENTIRE AGREEMENT: The foregoing agreement, including any attachments incorporated by reference, constitutes the entire agreement between the parties
+
+DESIRE, CONSULT WITH AN ATTORNEY BEFORE ENTERING THIS AGREEMENT. TENANTS acknowledge that TENANTS have read and understood this agreement and has been furnished a duplicate original
+
+SIGNATURES
+
+Owner or Representative: [Actual landlord/agent name - e.g., "John Smith, ABC Property Management"] Date: [Current date or signing date]
+
+Tenant(s) or authorized Tenant Representative: [Actual tenant name - e.g., "John Doe"] Date: _______________
+
+Tenant(s) or authorized Tenant Representative: [Second tenant name if applicable - e.g., "Jane Doe"] Date: _______________ (if multiple tenants)
+
+⚠️ CRITICAL: The document MUST end with a complete SIGNATURES section. Do NOT omit this final section.
+
+FORMATTING RULES FROM TEMPLATE:
+- Write section headers in ALL CAPS WITHOUT numbers (e.g., "PARTIES:", "RENTAL AMOUNT:", "TERM:")
+- Numbers will be added automatically (1. PARTIES:, 2. RENTAL AMOUNT:, etc.)
+- Use sentence case for body text and explanatory paragraphs
+- Only the main section keywords (PARTIES, RENTAL AMOUNT, etc.) should be in ALL CAPS
+- Body text follows normal capitalization
+- **FILL IN ALL DATA** - Replace all [brackets] and underscores with actual values
+- Examples:
+  * "LANDLORD: _____" becomes "LANDLORD: John Smith Property Management LLC"
+  * "sum of $_____" becomes "sum of $2,500"
+  * "TERM: _____" becomes "TERM: One (1) year commencing January 1, 2025 through December 31, 2025"
+  * "parking space #___" becomes "parking space #13"
+- Use specific legal phrasing like "TENANTS agree to pay LANDLORD"
+- Include specific references like "Code of Civil Procedure section 1174.2"
+- Maintain the conversational yet formal legal tone
+- Keep numbered/bulleted structure where appropriate
+- Include state-specific clauses (adapt California references to the actual jurisdiction)
+
+CRITICAL: Follow this EXACT structure and section order. Do not reorder, combine, or omit sections. Match the language patterns precisely. FILL IN ALL BLANKS WITH ACTUAL DATA PROVIDED.
 
 === INSTRUCTIONS FOR GENERATING LEASES ===
 
 FORMAT REQUIREMENTS:
-- Use the appropriate template above (Residential or Commercial) based on lease_type
-- Keep the final document to 2-3 pages
-- Use clear numbered sections (1, 2, 3, etc.) not lengthy article numbers
-- Fill in ALL bracketed placeholders with specific information from the request
-- Write in clear, professional language avoiding excessive legalese
-- Ensure document flows logically and is easy to read
-- Include ALL required sections without omitting any
+- STRICTLY follow "Updated Lease Agreement.docx" structure with all major sections in exact order
+- Keep the final document professional and complete (typically 3-5 pages)
+- Write section headers in ALL CAPS WITHOUT numbers (e.g., "PARTIES:", "RENTAL AMOUNT:", "TERM:")
+- Section numbers will be added automatically during PDF generation
+- **NEVER USE BLANK UNDERSCORES** - Always fill in actual data from the request
+- The template file shows "LANDLORD: _____" as examples, but you must write "LANDLORD: John Smith Property Management"
+- Replace ALL [bracketed placeholders] with actual specific values provided in the request
+- If data is not provided, use reasonable defaults or write "To be determined" (never leave blanks)
+- Examples of CORRECT formatting:
+  * ❌ WRONG: "sum of $_____ per month"
+  * ✅ CORRECT: "sum of $2,500 per month"
+  * ❌ WRONG: "parking space #___"
+  * ✅ CORRECT: "parking space #13"
+  * ❌ WRONG: "TERM: _________________"
+  * ✅ CORRECT: "TERM: One (1) year commencing January 1, 2025 through December 31, 2025"
+  * ❌ WRONG: "1. PARTIES:" or "2. RENTAL AMOUNT:"
+  * ✅ CORRECT: "PARTIES:" and "RENTAL AMOUNT:" (numbers added automatically)
+- Match the template's sentence patterns: "TENANTS agree to pay LANDLORD"
+- Include specific legal references like "Code of Civil Procedure section 1174.2"
+- Maintain conversational yet formal legal tone from template
+- Include ALL sections without omission
+
+CRITICAL SECTION ORDER (Write headers WITHOUT numbers - they're added automatically):
+- Title: RESIDENTIAL LEASE/RENTAL AGREEMENT (or COMMERCIAL LEASE/RENTAL AGREEMENT)
+- PARTIES: (Landlord)
+- TENANT(S): (Tenant names)
+- PROPERTY ADDRESS:
+- RENTAL AMOUNT: (with payment details following)
+- TERM:
+- SECURITY DEPOSITS:
+- INITIAL PAYMENT: (if applicable)
+- OCCUPANTS:
+- SUBLETTING OR ASSIGNING:
+- UTILITIES:
+- PARKING:
+- CONDITION OF THE PREMISES:
+- ALTERATIONS:
+- LATE CHARGE/BAD CHECKS:
+- NOISE AND DISRUPTIVE ACTIVITIES:
+- LANDLORD'S RIGHT OF ENTRY:
+- REPAIRS BY LANDLORD:
+- PETS:
+- FURNISHINGS:
+- INSURANCE:
+- TERMINATION OF LEASE/RENTAL AGREEMENT:
+- POSSESSION:
+- ABANDONMENT:
+- WAIVER:
+- VALIDITY/SEVERABILITY:
+- NOTICES:
+- PERSONAL PROPERTY OF TENANT:
+- Lead-Based Paint Disclosure (or APPLICATION:)
+- NEIGHBORHOOD CONDITIONS:
+- DATABASE DISCLOSURE:
+- Keys:
+- Property Condition List:
+- Satellite Dishes:
+- ATTORNEY FEES:
+- ENTIRE AGREEMENT:
+- Final acknowledgments
+- SIGNATURES
+
+The final document should be COMPLETE, PROFESSIONAL, and match "Updated Lease Agreement.docx" structure precisely.
 
 The final document should be COMPLETE, PROFESSIONAL, and ready for execution by both parties."""
 
@@ -697,17 +1197,33 @@ Grace Period: {financials.base_rent.grace_period_days or 0} days"""
 
 === DOCUMENT GENERATION INSTRUCTIONS ===
 
-Generate a COMPLETE {metadata.lease_type.upper()} LEASE AGREEMENT using the {'RESIDENTIAL' if metadata.lease_type.lower() == 'residential' else 'COMMERCIAL'} template provided in your system instructions.
+Generate a COMPLETE {metadata.lease_type.upper()} LEASE AGREEMENT that EXACTLY REPLICATES the format, structure, and style of "Updated Lease Agreement.docx" template.
 
-TARGET LENGTH: 2-3 pages (approximately 1000-1500 words)
+TARGET LENGTH: Can be 3-5 pages or more to match template completeness
 
 CRITICAL REQUIREMENTS:
-- Generate the ENTIRE lease in a SINGLE response
+- Generate the ENTIRE lease in a SINGLE response including ALL sections through SIGNATURES
 - Do NOT stop mid-document or ask to continue
 - Do NOT use "[Continued...]" or similar phrases
-- Follow the template structure with numbered sections
-- Fill in ALL specific details from the information below
-- Keep language clear and professional, not overly verbose
+- MUST include complete SIGNATURE section at the end
+- FOLLOW THE EXACT STRUCTURE AND FORMATTING OF "Updated Lease Agreement.docx"
+- Match the template's section titles, numbering, and order precisely
+- Use the same heading styles, capitalization, and emphasis as the template
+- Replicate the template's language style, paragraph sizing, and clause construction
+- Fill in ALL specific details from the information below while maintaining template format
+- Keep the professional legal tone consistent with the template
+- Match paragraph lengths and formatting style from the template
+
+TEMPLATE MATCHING CHECKLIST:
+✓ Section order matches "Updated Lease Agreement.docx" exactly
+✓ Heading styles and capitalization match the template
+✓ Paragraph formatting and spacing replicate the template
+✓ Paragraph sizes match template style (not too short, not too long)
+✓ Date and currency formats match template style
+✓ Legal terminology and phrasing consistent with template
+✓ Signature block format identical to template
+✓ COMPLETE document with signature section at the end
+✓ Overall document structure mirrors the template perfectly
 
 === SPECIFIC DETAILS TO INCLUDE ===
 
@@ -760,66 +1276,61 @@ STATE COMPLIANCE:
 
 === GENERATION INSTRUCTIONS ===
 
-1. Use the appropriate template ({'RESIDENTIAL' if metadata.lease_type.lower() == 'residential' else 'COMMERCIAL'}) from your system prompt
-2. Replace ALL bracketed placeholders with the specific information above
-3. Keep sections concise - 1-3 paragraphs each, not multiple pages per section
-4. Use simple numbered sections (1, 2, 3...) not complex article numbering
-5. Write in clear, professional language that both parties can understand
-6. Include signature blocks at the end with date lines
-7. Ensure the document is 2-3 pages total when formatted
-8. Generate the COMPLETE document in this single response
+1. Use "Updated Lease Agreement.docx" as your MASTER TEMPLATE for structure and formatting
+2. Adapt for {'RESIDENTIAL' if metadata.lease_type.lower() == 'residential' else 'COMMERCIAL'} lease while maintaining template format
+3. Replace ALL placeholders with the specific information above
+4. Keep sections concise - match the paragraph length style of the template
+5. Use the EXACT section numbering/lettering system from the template
+6. Write in the same professional legal language style as the template
+7. Include signature blocks formatted exactly as in the template
+8. Generate document as long as needed to include all sections completely (can be 3-5 pages or more)
+9. Generate the COMPLETE document in this single response
 
-HTML OUTPUT REQUIREMENTS - MANDATORY:
-Your response must be ONLY valid HTML5 code. Follow this EXACT structure:
+PLAIN TEXT OUTPUT REQUIREMENTS - MANDATORY:
+Your response must be ONLY clean plain text that REPLICATES the visual appearance and structure of "Updated Lease Agreement.docx". Follow this structure:
 
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lease Agreement</title>
-    <style>
-        /* Include ALL CSS from system prompt */
-        body {{ font-family: 'Times New Roman', Times, serif; ... }}
-        h1 {{ text-align: center; ... }}
-        /* ... complete CSS rules ... */
-    </style>
-</head>
-<body>
-    <h1>{'RESIDENTIAL' if metadata.lease_type.lower() == 'residential' else 'COMMERCIAL'} LEASE AGREEMENT</h1>
-    
-    <h2>1. PARTIES</h2>
-    <p>This Lease Agreement ("Agreement") is entered into on <strong>{current_date}</strong>...</p>
-    
-    <h2>2. PROPERTY</h2>
-    <p>Landlord leases to Tenant the premises located at...</p>
-    
-    <!-- Continue with ALL sections -->
-    
-    <div class="signature-section">
-        <h2>SIGNATURES</h2>
-        <!-- Signature blocks as specified in system prompt -->
-    </div>
-</body>
-</html>
+```
+                    RESIDENTIAL LEASE/RENTAL AGREEMENT
+
+PARTIES: LANDLORD: [Actual landlord name]
+
+TENANT(S): [Actual tenant names]
+
+PROPERTY ADDRESS: [Full property address]
+
+RENTAL AMOUNT: Commencing [date] TENANTS agree to pay LANDLORD the sum of $[amount] per month for this [X] Bedrooms, [X] Baths [property type] in advance
+
+[Continue with all sections in plain text format matching template structure]
+
+SIGNATURES
+
+LANDLORD:
+[Name]
+
+Signature: _______________________________  Date: ______________
+
+
+TENANT:
+[Name]
+
+Signature: _______________________________  Date: ______________
 ```
 
 CRITICAL VALIDATION CHECKLIST:
-✓ Starts with <!DOCTYPE html>
-✓ Complete <head> with charset, viewport, title, and full CSS
-✓ All opening tags have matching closing tags
-✓ No text outside of proper HTML tags
-✓ Proper nesting (no overlapping tags)
-✓ All special characters properly encoded (&amp; not &)
+✓ Plain text format only (no HTML, no markdown)
+✓ Section order and titles match the template exactly
+✓ ALL CAPS for section headers
+✓ Professional spacing and line breaks
+✓ All data filled in (no blank underscores for values)
 ✓ Complete signature section at end
-✓ Valid HTML5 that passes W3C validation
+✓ Clean, professional business document format
+✓ Visual appearance closely matches the .docx template when converted to PDF
 
-DO NOT include markdown code blocks, backticks, or any text before/after the HTML.
-DO NOT use invalid HTML syntax or shortcuts.
-DO NOT forget to close any tags.
-DO NOT omit the complete CSS styling.
+DO NOT include any HTML tags, markdown syntax, or special formatting codes.
+DO NOT use ```text``` code blocks or any other wrapper.
+DO NOT forget proper line breaks and spacing.
+DO NOT deviate from "Updated Lease Agreement.docx" template structure.
 
-WRITE THE COMPLETE {metadata.lease_type.upper()} LEASE NOW AS VALID HTML5 (2-3 pages):"""
+WRITE THE COMPLETE {metadata.lease_type.upper()} LEASE NOW AS CLEAN PLAIN TEXT MATCHING "Updated Lease Agreement.docx" FORMAT:"""
 
         return prompt

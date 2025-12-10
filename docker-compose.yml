@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   melkai-api:
     build:
@@ -10,8 +8,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Override with your .env file
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      # AWS Bedrock Configuration (for local testing only)
+      # On EC2 with IAM role, these will be ignored
+      - AWS_REGION=${AWS_REGION:-us-east-2}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      # Application Settings
       - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-10}
       - SEARCH_RESULTS_LIMIT=${SEARCH_RESULTS_LIMIT:-10}
     env_file:

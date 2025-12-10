@@ -1,64 +1,46 @@
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
     
-    # API Keys
-    OPENROUTER_API_KEY: str
+    # AWS Bedrock Configuration
+    AWS_REGION: str = "us-east-2"
     
-    # OpenRouter Configuration
-    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-    FREE_MODEL: str = "google/gemini-2.0-flash-001"
-    LEASE_GENERATOR_MODEL: str = "anthropic/claude-3.5-sonnet"
+    # AWS Credentials (optional - uses IAM role if not provided)
+    # For local testing, set these in .env file
+    # On EC2 with IAM role, leave these empty
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
     
-    # Models to test - ONLY models with web search capabilities
-    # Models without web search have been removed
+    # Model Configuration
+    # Use cross-region inference profiles (us. prefix) for on-demand access
+    FREE_MODEL: str = "us.meta.llama3-1-70b-instruct-v1:0"  # Replacing Gemini
+    LEASE_GENERATOR_MODEL: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"  # Claude Sonnet 4.5 - Best for legal with superior formatting
+    
+    # AWS Bedrock Models - All use DuckDuckGo search (no native search in Bedrock)
+    # Use cross-region inference profiles (us. prefix) for on-demand throughput
     ALL_MODELS: List[str] = [
-        # Perplexity - Native online search built-in (VERIFIED WORKING)
-        "perplexity/sonar-pro",
-        "perplexity/sonar",
-        "perplexity/sonar-reasoning",
+        # Anthropic Claude - Best for legal analysis
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",    # Claude Sonnet 4.5 - Latest, best quality
+        "us.anthropic.claude-3-5-sonnet-20241022-v2:0",  # Latest Claude 3.5 Sonnet
+        "us.anthropic.claude-3-5-sonnet-20240620-v1:0",  # Previous Claude 3.5 Sonnet
+        "us.anthropic.claude-3-opus-20240229-v1:0",      # Highest quality
+        "us.anthropic.claude-3-haiku-20240307-v1:0",     # Fastest, cheapest
         
-        # Anthropic Claude - Latest working models with search capabilities
-        "anthropic/claude-sonnet-4.5",
-        "anthropic/claude-3.7-sonnet",
-        "anthropic/claude-opus-4",
+        # Meta Llama - Open source, cost-effective
+        "us.meta.llama3-1-405b-instruct-v1:0",  # Largest, best quality
+        "us.meta.llama3-1-70b-instruct-v1:0",   # Balanced performance/cost
+        "us.meta.llama3-1-8b-instruct-v1:0",    # Fastest, cheapest
         
-        # OpenAI - Latest models with web search
-        "openai/gpt-5",
-        "openai/gpt-5-mini",
-        "openai/gpt-4o",
-        
-        # Google Gemini - Working 2.5 series
-        "google/gemini-2.5-flash-preview-09-2025",
-        "google/gemini-2.5-flash-lite",
-        
-        # Meta Llama - Free and paid models
-        "meta-llama/llama-4-scout",
-        "meta-llama/llama-3.3-8b-instruct:free",
-        
-        # Mistral - Working models
-        "mistralai/mistral-medium-3.1",
-        "mistralai/devstral-medium",
-        
-        # DeepSeek - Working models with search
-        "deepseek/deepseek-v3.2-exp",
-        "deepseek/deepseek-chat-v3.1:free",
-        
-        # Qwen - Working models
-        "qwen/qwen3-max",
-        "qwen/qwen3-coder-plus",
+        # Mistral AI - European alternative
+        "us.mistral.mistral-large-2407-v1:0",   # Best quality
+        "us.mistral.mistral-small-2402-v1:0",   # Cost-effective
     ]
     
-    # Legacy: Models categorized by native search capability
-    # (kept for backward compatibility with DuckDuckGo endpoint)
-    MODELS_WITH_NATIVE_SEARCH: List[str] = [
-        "perplexity/sonar-pro",
-        "perplexity/sonar",
-        "perplexity/sonar-reasoning",
-    ]
+    # AWS Bedrock has NO native search - all models use DuckDuckGo
+    MODELS_WITH_NATIVE_SEARCH: List[str] = []
     
     # Deprecated properties (for backward compatibility)
     @property

@@ -9,7 +9,7 @@ from app.models import (
 )
 from app.pdf_parser import PDFParser
 from app.web_search import WebSearcher
-from app.openrouter_client import OpenRouterClient
+from app.bedrock_client import BedrockClient
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class LeaseAnalyzer:
     def __init__(self):
         self.pdf_parser = PDFParser()
         self.web_searcher = WebSearcher()
-        self.openrouter_client = OpenRouterClient()
+        self.bedrock_client = BedrockClient()
         self.executor = ThreadPoolExecutor(max_workers=5)
     
     @staticmethod
@@ -108,7 +108,7 @@ class LeaseAnalyzer:
             # use_native_search=True means the model will search the web itself
             # use_native_search=False means we provide DuckDuckGo search results
             # Model now extracts location from lease text
-            violations, metrics, extracted_location = self.openrouter_client.analyze_lease_with_search(
+            violations, metrics, extracted_location = self.bedrock_client.analyze_lease_with_search(
                 model_name=model_name,
                 lease_info=lease_info,
                 search_results=search_results,
@@ -370,7 +370,7 @@ class LeaseAnalyzer:
             lease_info = self.pdf_parser.extract_lease_info(pdf_bytes)
             
             # Analyze with Mistral Medium 3.1 (categorized)
-            violations_by_category, metrics, extracted_location = self.openrouter_client.analyze_lease_categorized(
+            violations_by_category, metrics, extracted_location = self.bedrock_client.analyze_lease_categorized(
                 lease_info=lease_info
             )
             

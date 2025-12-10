@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from enum import Enum
@@ -24,59 +24,34 @@ from app.models import (
     LeaseGenerationResponse
 )
 from app.analyzer import LeaseAnalyzer
-from app.openrouter_client import OpenRouterClient
+from app.bedrock_client import BedrockClient
 from app.lease_generator import LegalResearchService, LeaseGenerationService
 from app.config import settings
 
 # Enums for dropdown selections in Swagger UI
 class ProviderEnum(str, Enum):
-    """Available AI providers"""
-    openai = "openai"
+    """Available AI providers on AWS Bedrock"""
     anthropic = "anthropic"
-    google = "google"
     meta = "meta"
     mistral = "mistral"
-    deepseek = "deepseek"
-    qwen = "qwen"
-    perplexity = "perplexity"
 
 
 class ModelEnum(str, Enum):
-    """Available AI models with web search capabilities"""
-    # Perplexity (Native Search Built-in)
-    perplexity_sonar_pro = "perplexity/sonar-pro"
-    perplexity_sonar = "perplexity/sonar"
-    perplexity_sonar_reasoning = "perplexity/sonar-reasoning"
+    """Available AI models on AWS Bedrock"""
+    # Anthropic Claude (Best for legal analysis)
+    claude_35_sonnet_v2 = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    claude_35_sonnet_v1 = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    claude_3_opus = "anthropic.claude-3-opus-20240229-v1:0"
+    claude_3_haiku = "anthropic.claude-3-haiku-20240307-v1:0"
     
-    # Anthropic Claude (2025 working models)
-    claude_sonnet_45 = "anthropic/claude-sonnet-4.5"
-    claude_37_sonnet = "anthropic/claude-3.7-sonnet"
-    claude_opus_4 = "anthropic/claude-opus-4"
+    # Meta Llama (Open source)
+    llama_405b = "meta.llama3-1-405b-instruct-v1:0"
+    llama_70b = "meta.llama3-1-70b-instruct-v1:0"
+    llama_8b = "meta.llama3-1-8b-instruct-v1:0"
     
-    # OpenAI (Latest with search)
-    gpt_5 = "openai/gpt-5"
-    gpt_5_mini = "openai/gpt-5-mini"
-    gpt_4o = "openai/gpt-4o"
-    
-    # Google Gemini (Working 2.5 series)
-    gemini_25_flash = "google/gemini-2.5-flash-preview-09-2025"
-    gemini_25_flash_lite = "google/gemini-2.5-flash-lite"
-    
-    # Meta Llama
-    llama_4_scout = "meta-llama/llama-4-scout"
-    llama_33_free = "meta-llama/llama-3.3-8b-instruct:free"
-    
-    # Mistral (Working models)
-    mistral_medium = "mistralai/mistral-medium-3.1"
-    devstral_medium = "mistralai/devstral-medium"
-    
-    # DeepSeek (Working models)
-    deepseek_v32 = "deepseek/deepseek-v3.2-exp"
-    deepseek_chat_free = "deepseek/deepseek-chat-v3.1:free"
-    
-    # Qwen (Working models)
-    qwen3_max = "qwen/qwen3-max"
-    qwen3_coder_plus = "qwen/qwen3-coder-plus"
+    # Mistral AI (European alternative)
+    mistral_large = "mistral.mistral-large-2407-v1:0"
+    mistral_small = "mistral.mistral-small-2402-v1:0"
 
 # Configure logging
 logging.basicConfig(
@@ -202,7 +177,7 @@ async def list_models():
         List of ModelInfo objects
     """
     try:
-        models = OpenRouterClient.get_available_models()
+        models = BedrockClient.get_available_models()
         return models
     except Exception as e:
         logger.error(f"Error listing models: {str(e)}")
@@ -632,8 +607,8 @@ async def evaluate_maintenance_request(
     logger.info(f"Evaluating maintenance request: {validated_request[:50]}...")
     if validated_notes:
         logger.info(f"Landlord notes: {validated_notes[:100]}...")
-    openrouter_client = OpenRouterClient()
-    result = openrouter_client.evaluate_maintenance_request(
+    bedrock_client = BedrockClient()
+    result = bedrock_client.evaluate_maintenance_request(
         maintenance_request=validated_request,
         lease_info=lease_info,
         landlord_notes=validated_notes
@@ -713,8 +688,8 @@ async def generate_vendor_work_order(
     logger.info(f"Generating vendor work order for: {validated_request[:50]}...")
     if validated_notes:
         logger.info(f"Landlord notes: {validated_notes[:100]}...")
-    openrouter_client = OpenRouterClient()
-    result = openrouter_client.generate_vendor_work_order(
+    bedrock_client = BedrockClient()
+    result = bedrock_client.generate_vendor_work_order(
         maintenance_request=validated_request,
         lease_info=lease_info,
         landlord_notes=validated_notes
@@ -820,8 +795,8 @@ async def maintenance_workflow(
     if validated_notes:
         logger.info(f"Landlord notes: {validated_notes[:100]}...")
     
-    openrouter_client = OpenRouterClient()
-    result = openrouter_client.process_maintenance_workflow(
+    bedrock_client = BedrockClient()
+    result = bedrock_client.process_maintenance_workflow(
         maintenance_request=validated_request,
         lease_info=lease_info,
         landlord_notes=validated_notes
@@ -901,8 +876,8 @@ async def evaluate_move_out_request(
     logger.info(f"Evaluating move-out request: {validated_request[:100]}...")
     if validated_notes:
         logger.info(f"Owner notes: {validated_notes[:100]}...")
-    openrouter_client = OpenRouterClient()
-    result = openrouter_client.evaluate_move_out_request(
+    bedrock_client = BedrockClient()
+    result = bedrock_client.evaluate_move_out_request(
         move_out_request=validated_request,
         lease_info=lease_info,
         owner_notes=validated_notes
@@ -970,8 +945,8 @@ async def rewrite_tenant_message(
     logger.info(f"Rewriting tenant message: {validated_message[:100]}...")
     
     # Rewrite message using AI
-    openrouter_client = OpenRouterClient()
-    result = openrouter_client.rewrite_tenant_message(
+    bedrock_client = BedrockClient()
+    result = bedrock_client.rewrite_tenant_message(
         tenant_message=validated_message
     )
     
@@ -1108,8 +1083,8 @@ async def maintenance_chat(
     
     try:
         # Process chat request
-        openrouter_client = OpenRouterClient()
-        result = openrouter_client.maintenance_chat(
+        bedrock_client = BedrockClient()
+        result = bedrock_client.maintenance_chat(
             conversation_history=chat_request.conversationHistory
         )
         
@@ -1220,19 +1195,21 @@ async def health_check():
     return {"status": "healthy", "service": "Lease Violation Analyzer"}
 
 
-@app.post("/lease/generate", response_model=LeaseGenerationResponse)
+@app.post("/lease/generate")
 async def generate_lease(
     request: Request,
     lease_request: LeaseGenerationRequestWrapper = Body(...)
 ):
     """
-    Generate a comprehensive lease agreement with legal research
+    Generate a comprehensive lease agreement with legal research and return as HTML
     
     This endpoint:
     1. Validates the lease request data
     2. Performs jurisdiction-specific legal research
-    3. Generates a complete lease document using Claude 3.5 Sonnet
-    4. Returns the document with metadata and compliance information
+    3. Generates a complete lease document using Claude Sonnet 4.5
+    4. Converts the document to HTML format with proper styling and numbering
+    5. Returns ready-to-display HTML that can be rendered directly in the frontend
+    5. Returns the PDF file for download
     
     Args:
         lease_request: Complete lease generation request with all required details
@@ -1283,7 +1260,7 @@ async def generate_lease(
             lease_type=req_data.metadata.lease_type
         )
         
-        # Generate the lease document
+        # Generate the lease document (plain text)
         logger.info("Generating lease document with Claude 3.5 Sonnet")
         lease_document = await lease_generation_service.generate_lease(
             request=req_data,
@@ -1294,26 +1271,24 @@ async def generate_lease(
         word_count = len(lease_document.split())
         logger.info(f"Generated lease document with {word_count} words")
         
-        # Build response
-        response = LeaseGenerationResponse(
-            success=True,
-            lease_document=lease_document,
-            word_count=word_count,
-            metadata={
-                "lease_type": req_data.metadata.lease_type,
-                "property_name": req_data.property_details.name,
-                "property_address": f"{req_data.property_details.address.street}, {req_data.property_details.address.city}, {req_data.property_details.address.state} {req_data.property_details.address.zip}",
-                "start_date": req_data.lease_terms.start_date,
-                "end_date": req_data.lease_terms.end_date,
-                "monthly_rent": req_data.financials.base_rent.amount,
-                "model_used": settings.LEASE_GENERATOR_MODEL,
-                "generated_at": datetime.now().isoformat()
-            },
-            legal_research=legal_research_dict,
-            warnings=warnings if warnings else None
-        )
+        # Convert to HTML
+        logger.info("Converting lease document to HTML")
+        property_name = req_data.property_details.name or "Lease_Agreement"
+        html_content = lease_generation_service.convert_to_html(lease_document, property_name)
         
-        return response
+        logger.info(f"Generated HTML lease document ({len(html_content)} bytes)")
+        
+        # Return HTML response
+        return HTMLResponse(
+            content=html_content,
+            status_code=200,
+            headers={
+                "X-Word-Count": str(word_count),
+                "X-Lease-Type": req_data.metadata.lease_type,
+                "X-Property-Name": req_data.property_details.name or "Unknown",
+                "X-Generated-At": datetime.now().isoformat()
+            }
+        )
     
     except HTTPException:
         raise

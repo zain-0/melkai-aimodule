@@ -47,6 +47,7 @@ test_*.py
 *_test.py
 test_leases/
 *.pdf
+test_*.json
 
 # Logs
 *.log
