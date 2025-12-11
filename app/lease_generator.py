@@ -238,9 +238,9 @@ class LeaseGenerationService:
             self.client = session.client(
                 service_name='bedrock-runtime',
                 config=boto3.session.Config(
-                    read_timeout=120,
-                    connect_timeout=10,
-                    retries={'max_attempts': 3, 'mode': 'adaptive'}
+                    read_timeout=60,  # Reduced for faster EC2-to-Bedrock calls
+                    connect_timeout=5,  # Faster connection on AWS network
+                    retries={'max_attempts': 2, 'mode': 'standard'}  # Fewer retries for speed
                 )
             )
             self.model = settings.LEASE_GENERATOR_MODEL
@@ -272,8 +272,8 @@ class LeaseGenerationService:
             # Format request body for Claude on Bedrock
             body = json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 8000,  # Reduced for shorter 2-3 page leases
-                "temperature": 0.3,
+                "max_tokens": 2500,  # Optimized for 800-1200 word leases (faster generation)
+                "temperature": 0.2,  # Lower for faster, more consistent output
                 "system": self._get_system_prompt(),
                 "messages": [
                     {
@@ -343,8 +343,8 @@ class LeaseGenerationService:
                 parent=styles['Normal'],
                 fontSize=11,
                 alignment=TA_LEFT,
-                spaceAfter=6,
-                spaceBefore=8,
+                spaceAfter=3,
+                spaceBefore=6,
                 fontName='Times-Bold',
                 leading=13
             )
@@ -355,7 +355,7 @@ class LeaseGenerationService:
                 parent=styles['BodyText'],
                 fontSize=11,
                 alignment=TA_LEFT,
-                spaceAfter=6,
+                spaceAfter=3,
                 fontName='Times-Roman',
                 leading=13
             )
@@ -363,7 +363,7 @@ class LeaseGenerationService:
             # Section keywords that indicate a major section heading
             # These should ONLY match the actual header line, not body paragraphs
             section_keywords = [
-                'PARTIES:', 'TENANT(S):', 'PROPERTY ADDRESS:', 'RENTAL AMOUNT:', 
+                'PARTIES:', 'LANDLORD:', 'TENANT(S):', 'PROPERTY ADDRESS:', 'RENTAL AMOUNT:', 
                 'TERM:', 'SECURITY DEPOSITS:', 'SECURITY DEPOSIT:', 'INITIAL PAYMENT:', 
                 'OCCUPANTS:', 'SUBLETTING OR ASSIGNING:', 'SUBLETTING:', 
                 'UTILITIES:', 'PARKING:', 'CONDITION OF THE PREMISES:', 
@@ -390,14 +390,13 @@ class LeaseGenerationService:
                 line = line.strip()
                 
                 if not line:
-                    # Empty line - add small spacer
-                    story.append(Spacer(1, 0.08*inch))
+                    # Skip empty lines - spacing handled by paragraph styles
                     continue
                 
                 # Check if it's the main title
-                if ('RESIDENTIAL LEASE' in line.upper() or 'COMMERCIAL LEASE' in line.upper()) and 'AGREEMENT' in line.upper() and i < 5:
+                if (('RESIDENTIAL LEASE' in line.upper() or 'COMMERCIAL LEASE' in line.upper()) and i < 5):
                     story.append(Paragraph(line, title_style))
-                    story.append(Spacer(1, 0.15*inch))
+                    story.append(Spacer(1, 0.08*inch))
                     continue
                 
                 # Check if we're entering signature section
@@ -495,8 +494,8 @@ class LeaseGenerationService:
         """
         try:
             # Section keywords that indicate a major section heading
-            # Note: PARTIES, TENANT(S), and PROPERTY ADDRESS are handled specially (no numbering)
-            initial_fields = ['PARTIES:', 'TENANT(S):', 'PROPERTY ADDRESS:']
+            # Note: PARTIES, TENANT(S), LANDLORD, and PROPERTY ADDRESS are handled specially (no numbering)
+            initial_fields = ['PARTIES:', 'LANDLORD:', 'TENANT(S):', 'PROPERTY ADDRESS:']
             section_keywords = [
                 'RENTAL AMOUNT:', 
                 'TERM:', 'SECURITY DEPOSITS:', 'SECURITY DEPOSIT:', 'INITIAL PAYMENT:', 
@@ -530,7 +529,7 @@ class LeaseGenerationService:
         body {
             font-family: 'Times New Roman', Times, serif;
             font-size: 11pt;
-            line-height: 1.4;
+            line-height: 1.3;
             max-width: 8.5in;
             margin: 0 auto;
             padding: 0.75in;
@@ -541,21 +540,21 @@ class LeaseGenerationService:
             text-align: center;
             font-size: 14pt;
             font-weight: bold;
-            margin-bottom: 20px;
+            margin-bottom: 12px;
             text-transform: uppercase;
         }
         .section-header {
             font-weight: bold;
-            margin-top: 12px;
-            margin-bottom: 6px;
+            margin-top: 8px;
+            margin-bottom: 3px;
             font-size: 11pt;
         }
         .body-text {
-            margin-bottom: 6px;
+            margin-bottom: 3px;
             text-align: left;
         }
         .signature-section {
-            margin-top: 20px;
+            margin-top: 12px;
         }
         .signature-label {
             font-weight: bold;
@@ -579,8 +578,7 @@ class LeaseGenerationService:
                 line = line.strip()
                 
                 if not line:
-                    # Empty line
-                    html_parts.append('<br>')
+                    # Skip excessive empty lines - spacing handled by CSS
                     continue
                 
                 # Escape HTML entities
@@ -589,12 +587,12 @@ class LeaseGenerationService:
                 
                 # Check if it's the main title
                 if (('RESIDENTIAL LEASE' in line_upper or 'COMMERCIAL LEASE' in line_upper) and i < 5) and \
-                   (line.strip().upper() in ['RESIDENTIAL LEASE', 'COMMERCIAL LEASE'] or 'RENTAL AGREEMENT' in line_upper):
-                    # Extract just RESIDENTIAL LEASE or COMMERCIAL LEASE part
+                   (line.strip().upper() in ['RESIDENTIAL LEASE', 'COMMERCIAL LEASE', 'RESIDENTIAL LEASE AGREEMENT', 'COMMERCIAL LEASE AGREEMENT'] or 'RENTAL AGREEMENT' in line_upper):
+                    # Extract just RESIDENTIAL LEASE AGREEMENT or COMMERCIAL LEASE AGREEMENT part
                     if 'RESIDENTIAL' in line_upper:
-                        html_parts.append('<div class="title">RESIDENTIAL LEASE</div>')
+                        html_parts.append('<div class="title">RESIDENTIAL LEASE AGREEMENT</div>')
                     else:
-                        html_parts.append('<div class="title">COMMERCIAL LEASE</div>')
+                        html_parts.append('<div class="title">COMMERCIAL LEASE AGREEMENT</div>')
                     continue
                 
                 # Check if it's one of the initial fields (PARTIES, TENANT(S), PROPERTY ADDRESS)
@@ -688,67 +686,27 @@ class LeaseGenerationService:
     
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the AI model"""
-        return """You are an expert legal document specialist creating CONCISE residential/commercial lease agreements.
+        return """Expert legal document specialist. Generate COMPLETE, CONCISE residential/commercial lease agreements.
 
-CRITICAL LENGTH REQUIREMENT:
-- STRICT MAXIMUM: 2-3 pages (800-1200 words total)
-- Generate COMPLETE lease in single response - never stop mid-document
-- Keep each section to 1-2 sentences maximum
-- Prioritize brevity while maintaining legal validity
+REQUIREMENTS:
+- Length: 800-1200 words (2-3 pages MAX)
+- Format: Plain text only (no HTML/markdown)
+- Complete document in single response with ALL sections through SIGNATURES
+- Each section: 1-2 sentences maximum
 
-DOCUMENT FORMAT:
-Generate clean plain text (no HTML, no markdown). Structure:
+STRUCTURE:
+1. Title: RESIDENTIAL LEASE AGREEMENT or COMMERCIAL LEASE AGREEMENT
+2. Unnumbered headers: PARTIES: (blank - no content after colon) | LANDLORD: [name] | TENANT(S): [names] | PROPERTY ADDRESS: [address]
+3. Sections (headers in ALL CAPS, no numbers): RENTAL AMOUNT | TERM | SECURITY DEPOSITS | UTILITIES | LATE FEES | MAINTENANCE AND REPAIRS | PETS | OCCUPANCY | ENTRY AND ACCESS | TERMINATION | GOVERNING LAW | ENTIRE AGREEMENT | SIGNATURES
 
-1. Title: RESIDENTIAL LEASE (or COMMERCIAL LEASE)
-2. Three unnumbered header fields:
-   - PARTIES: LANDLORD: [actual landlord name]
-   - TENANT(S): [actual tenant names]
-   - PROPERTY ADDRESS: [complete address]
-3. Numbered sections (write headers WITHOUT numbers - they're added automatically):
-   - RENTAL AMOUNT: [amount, due date, payment method - 2 sentences max]
-   - TERM: [start/end dates, renewal terms - 2 sentences max]
-   - SECURITY DEPOSITS: [amount and return conditions - 2 sentences max]
-   - UTILITIES: [who pays what - 1-2 sentences]
-   - LATE FEES: [penalty terms - 1 sentence]
-   - MAINTENANCE AND REPAIRS: [landlord/tenant duties - 2 sentences max]
-   - PETS: [policy - 1 sentence]
-   - OCCUPANCY: [max occupants, subletting rules - 1-2 sentences]
-   - ENTRY AND ACCESS: [landlord entry rights - 1 sentence]
-   - TERMINATION: [termination terms - 2 sentences max]
-   - GOVERNING LAW: [jurisdiction - 1 sentence]
-   - ENTIRE AGREEMENT: [standard clause - 1 sentence]
-   - SIGNATURES: [landlord and tenant signature blocks with underscores for signatures]
+FORMAT:
+- Headers: ALL CAPS with colon (e.g., "RENTAL AMOUNT:")
+- Body: Normal case, professional
+- No blank lines between sections
+- Signature lines: use underscores _______________________________
+- Fill ALL data from user prompt
 
-FORMATTING RULES:
-- Section headers: ALL CAPS (e.g., "RENTAL AMOUNT:" not "1. RENTAL AMOUNT:")
-- Body text: normal capitalization, professional tone
-- One blank line between sections
-- Use underscores for signature lines: _______________________________
-- NO HTML tags, NO markdown, NO special formatting codes
-- Fill in ALL data - never leave blanks or use placeholders
-
-EXAMPLE START:
-RESIDENTIAL LEASE
-
-PARTIES: LANDLORD: ABC Property Management LLC
-
-TENANT(S): John Doe and Jane Doe
-
-PROPERTY ADDRESS: 123 Main Street, Apartment 4B, Los Angeles, CA 90001
-
-RENTAL AMOUNT: Commencing January 1, 2025 TENANTS agree to pay LANDLORD $2,500 per month due on the 1st. Payment by check or online transfer to [payment address].
-
-TERM: One year lease from January 1, 2025 through December 31, 2025. Tenant may renew with 60 days notice.
-
-[Continue with remaining sections...]
-
-SIGNATURES
-
-LANDLORD: [actual name]  Date: _______________
-
-TENANT: [actual name]  Date: _______________
-
-Generate complete, professional lease ready for execution."""
+Generate complete, brief, professional lease now."""
 
     def _build_lease_prompt(
         self,
@@ -877,163 +835,8 @@ Grace Period: {financials.base_rent.grace_period_days or 0} days"""
         # Add generation instructions
         prompt += f"""
 
-=== DOCUMENT GENERATION INSTRUCTIONS ===
+=== GENERATE COMPLETE {metadata.lease_type.upper()} LEASE ===
 
-Generate a COMPLETE {metadata.lease_type.upper()} LEASE AGREEMENT that EXACTLY REPLICATES the format, structure, and style of "Updated Lease Agreement.docx" template.
-
-TARGET LENGTH: STRICT MAXIMUM 2-3 pages (800-1200 words) - NO EXCEPTIONS
-
-CRITICAL REQUIREMENTS:
-- Generate the ENTIRE lease in a SINGLE response including ALL sections through SIGNATURES
-- Do NOT stop mid-document or ask to continue
-- Do NOT use "[Continued...]" or similar phrases
-- MUST include complete SIGNATURE section at the end
-- FOLLOW A SIMPLIFIED, STREAMLINED STRUCTURE
-- Use brief section titles and concise content (1-2 sentences per section)
-- Eliminate verbose explanations and unnecessary legal elaboration
-- Combine sections where possible to save space
-- Use condensed language while maintaining legal validity
-- Keep each paragraph to 2-3 lines MAXIMUM
-- Prioritize essential information only - remove all "nice to have" clauses
-
-BREVITY CHECKLIST:
-✓ Document is 2-3 pages MAXIMUM (800-1200 words)
-✓ Each section is 1-3 sentences only
-✓ No verbose explanations or unnecessary detail
-✓ Combined sections where possible
-✓ Eliminated all redundant clauses
-✓ Used condensed legal language
-✓ Removed "nice to have" provisions
-✓ COMPLETE document with signature section at the end
-✓ Professional but BRIEF throughout
-
-=== SPECIFIC DETAILS TO INCLUDE ===
-
-EXECUTION DATE: {current_date}
-
-PARTIES:
-- Landlord: {parties.landlord_entity}
-- Tenant(s): {tenant_str}
-
-PROPERTY:
-- Address: {address_str}
-- Unit: {property_details.unit_details.unit_number if property_details.unit_details and property_details.unit_details.unit_number else 'N/A'}
-- Size: {property_details.unit_details.size_sq_ft if property_details.unit_details and property_details.unit_details.size_sq_ft else 'N/A'} sq ft
-- Type: {metadata.lease_type}
-
-TERM:
-- Start: {lease_terms.start_date}
-- End: {lease_terms.end_date}
-- Summary: {lease_terms.planned_term_summary}
-- Renewal: {lease_terms.renewal_options if lease_terms.renewal_options else 'None'}
-- Rent Increase on Renewal: {lease_terms.renewal_rent_increase_terms if lease_terms.renewal_rent_increase_terms else 'N/A'}
-
-RENT:
-- Base Rent: {format_currency(base_rent_amount) if base_rent_amount else 'TBD'} per month
-- Due: First day of each month
-- Grace Period: {financials.base_rent.grace_period_days} days
-- Late Fee: {calculate_late_fee_description(financials.late_fees, base_rent_amount) if financials.late_fees and financials.late_fees.amount else 'Per state law'}
-
-DEPOSITS:
-- Security Deposit: {format_currency(financials.deposits.security_deposit_amount) if financials.deposits and financials.deposits.security_deposit_amount else 'TBD'}
-{chr(10).join(f"- {d.label}: {format_currency(d.amount)}" for d in financials.deposits.other_deposits) if financials.deposits and financials.deposits.other_deposits else ''}
-- Total Deposits: {format_currency(calculate_total_deposits(financials.deposits)) if financials.deposits else 'TBD'}
-
-UTILITIES:
-{chr(10).join(f"- {format_utility_payment(u)}" for u in responsibilities.utilities) if responsibilities and responsibilities.utilities else '- As specified in lease'}
-
-COMMON AREA MAINTENANCE (CAM):
-{chr(10).join(f"- {format_cam_payment(c)}" for c in responsibilities.common_area_maintenance) if responsibilities and responsibilities.common_area_maintenance else '- N/A'}
-
-ADDITIONAL FEES:
-{chr(10).join(f"- {format_additional_fee(f, base_rent_amount)}" for f in responsibilities.additional_fees) if responsibilities and responsibilities.additional_fees else '- N/A'}
-
-SPECIAL CLAUSES:
-{legal_terms.special_clauses if legal_terms and legal_terms.special_clauses else 'None'}
-
-STATE COMPLIANCE:
-- State: {addr.state}
-- Laws: {', '.join(legal_research['laws_checked'])}
-- Requirements: {'; '.join(legal_research['compliance_notes'])}
-
-=== GENERATION INSTRUCTIONS ===
-
-1. Create a STREAMLINED {'RESIDENTIAL' if metadata.lease_type.lower() == 'residential' else 'COMMERCIAL'} lease with simplified structure
-2. Replace ALL placeholders with the specific information above
-3. Keep ALL sections ULTRA-BRIEF (1-2 sentences each)
-4. Use simplified section numbering
-5. Write in concise, direct legal language
-6. Include brief signature blocks
-7. STRICT LIMIT: 2-3 pages MAXIMUM (800-1200 words)
-8. Prioritize essential clauses only - eliminate verbose or optional sections
-9. Generate the COMPLETE but BRIEF document in this single response
-
-PLAIN TEXT OUTPUT REQUIREMENTS - MANDATORY:
-Your response must be ONLY clean plain text in a BRIEF, STREAMLINED format with ONLY essential sections. Follow this structure:
-
-```
-                    RESIDENTIAL LEASE
-
-PARTIES: LANDLORD: [Actual landlord name]
-
-TENANT(S): [Actual tenant names]
-
-PROPERTY ADDRESS: [Full property address]
-
-RENTAL AMOUNT: Commencing [date] TENANTS agree to pay LANDLORD $[amount] per month, due on the [day] of each month. Payment shall be made to [payment location/method].
-
-TERM: The lease term is [duration] commencing [start date] and ending [end date]. [Brief renewal terms if applicable - 1 sentence].
-
-SECURITY DEPOSITS: TENANT shall deposit $[amount] as security deposit. Deposit will be returned within [days] days after lease termination, less any deductions for damages.
-
-UTILITIES: [Brief list of who pays which utilities - 1-2 sentences].
-
-LATE FEES: Late payments shall incur a fee of [amount/percentage]. [Any NSF check fees - 1 sentence].
-
-MAINTENANCE AND REPAIRS: LANDLORD is responsible for major repairs and structural maintenance. TENANT is responsible for minor repairs under $[amount] and routine maintenance.
-
-PETS: [Pets allowed/not allowed with brief terms and any deposits/fees].
-
-OCCUPANCY: Maximum occupants: [number]. Subletting requires written landlord approval.
-
-ENTRY AND ACCESS: LANDLORD may enter premises with [hours] hours notice for inspections and repairs.
-
-TERMINATION: [Brief termination terms - notice requirements, early termination penalties if any].
-
-GOVERNING LAW: This lease is governed by the laws of [State].
-
-ENTIRE AGREEMENT: This document constitutes the entire agreement between parties and supersedes all prior agreements.
-
-SIGNATURES
-
-LANDLORD: [Name]
-Signature: _______________________________  Date: ______________
-
-TENANT: [Name]
-Signature: _______________________________  Date: ______________
-```
-
-REMEMBER: MAXIMUM 2-3 pages (800-1200 words). Include ONLY the sections listed above. Keep EVERY section to 1-2 sentences.
-
-CRITICAL VALIDATION CHECKLIST:
-✓ Plain text format only (no HTML, no markdown)
-✓ MAXIMUM 2-3 pages (800-1200 words) - COUNT YOUR WORDS
-✓ Each section is 1-2 sentences MAXIMUM
-✓ ALL CAPS for section headers
-✓ Professional spacing and line breaks
-✓ All data filled in (no blank underscores for values)
-✓ Complete signature section at end
-✓ Clean, BRIEF, professional business document format
-✓ NO verbose explanations or lengthy clauses
-
-DO NOT include any HTML tags, markdown syntax, or special formatting codes.
-DO NOT use ```text``` code blocks or any other wrapper.
-DO NOT forget proper line breaks and spacing.
-DO NOT write lengthy, verbose sections - keep EVERY section to 1-2 sentences.
-DO NOT exceed 2-3 pages (800-1200 words) under ANY circumstances.
-
-⚠️ FINAL REMINDER: This lease MUST be 2-3 pages MAX. Write brief, concise sections. Eliminate all unnecessary text.
-
-WRITE THE COMPLETE BUT CONCISE {metadata.lease_type.upper()} LEASE NOW AS CLEAN PLAIN TEXT (2-3 PAGES MAX):"""
+Use all details above. 800-1200 words. Plain text, no blank lines between sections. 1-2 sentences per section. Generate now:"""
 
         return prompt
