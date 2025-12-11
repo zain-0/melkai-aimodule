@@ -272,7 +272,7 @@ class LeaseGenerationService:
             # Format request body for Claude on Bedrock
             body = json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 2500,  # Optimized for 800-1200 word leases (faster generation)
+                "max_tokens": 4000,  # Increased for longer, more comprehensive leases (1600-2000 words)
                 "temperature": 0.2,  # Lower for faster, more consistent output
                 "system": self._get_system_prompt(),
                 "messages": [
@@ -499,8 +499,8 @@ class LeaseGenerationService:
         """
         try:
             # Section keywords that indicate a major section heading
-            # Note: PARTIES, TENANT(S), LANDLORD, and PROPERTY ADDRESS are handled specially (no numbering)
-            initial_fields = ['PARTIES:', 'LANDLORD:', 'TENANT(S):', 'PROPERTY ADDRESS:']
+            # Note: PARTIES, TENANT(S), LANDLORD, PROPERTY, and LEASE TERM are handled specially (no numbering, bold headers)
+            initial_fields = ['PARTIES:', 'LANDLORD:', 'TENANT(S):', 'PROPERTY ADDRESS:', 'PROPERTY:', 'LEASE TERM:']
             section_keywords = [
                 'RENTAL AMOUNT:', 
                 'TERM:', 'SECURITY DEPOSITS:', 'SECURITY DEPOSIT:', 'INITIAL PAYMENT:', 
@@ -531,7 +531,7 @@ class LeaseGenerationService:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lease Agreement - ''' + property_name + '''</title>
 </head>
-<body style="font-family: 'Times New Roman', Times, serif; font-size: 11pt; line-height: 1.3; max-width: 8.5in; margin: 0 auto; padding: 0.75in; background-color: #ffffff; color: #000000;">
+<body style="font-family: 'Times New Roman', Times, serif; font-size: 10pt; line-height: 1.3; max-width: 8.5in; margin: 0 auto; padding: 0.75in; background-color: #ffffff; color: #000000;">
 ''')
             
             # Process content
@@ -555,9 +555,9 @@ class LeaseGenerationService:
                    (line.strip().upper() in ['RESIDENTIAL LEASE', 'COMMERCIAL LEASE', 'RESIDENTIAL LEASE AGREEMENT', 'COMMERCIAL LEASE AGREEMENT'] or 'RENTAL AGREEMENT' in line_upper):
                     # Extract just RESIDENTIAL LEASE AGREEMENT or COMMERCIAL LEASE AGREEMENT part
                     if 'RESIDENTIAL' in line_upper:
-                        html_parts.append('<div style="text-align: center; font-size: 13pt; font-weight: bold; margin-bottom: 12px; text-transform: uppercase;">RESIDENTIAL LEASE AGREEMENT</div>')
+                        html_parts.append('<div style="text-align: center; font-size: 10pt; font-weight: bold; margin-bottom: 12px; text-transform: uppercase;">RESIDENTIAL LEASE AGREEMENT</div>')
                     else:
-                        html_parts.append('<div style="text-align: center; font-size: 13pt; font-weight: bold; margin-bottom: 12px; text-transform: uppercase;">COMMERCIAL LEASE AGREEMENT</div>')
+                        html_parts.append('<div style="text-align: center; font-size: 10pt; font-weight: bold; margin-bottom: 12px; text-transform: uppercase;">COMMERCIAL LEASE AGREEMENT</div>')
                     continue
                 
                 # Check if it's one of the initial fields (PARTIES, TENANT(S), PROPERTY ADDRESS)
@@ -577,14 +577,14 @@ class LeaseGenerationService:
                             # PARTIES field should be completely blank - no underscore, even if AI added underscores
                             if 'PARTIES:' in bold_part_escaped:
                                 # Strip out any underscores the AI may have added
-                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 11pt;"><strong>{bold_part_escaped}</strong></div>')
+                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong></div>')
                             elif rest and not rest.strip('_').strip():
                                 # If rest is only underscores or whitespace, don't include it
-                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 11pt;"><strong>{bold_part_escaped}</strong></div>')
+                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong></div>')
                             elif rest:
-                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 11pt;"><strong>{bold_part_escaped}</strong> {rest_escaped}</div>')
+                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong> {rest_escaped}</div>')
                             else:
-                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 11pt;"><strong>{bold_part_escaped}</strong></div>')
+                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong></div>')
                         break
                 
                 if is_initial_field:
@@ -594,7 +594,7 @@ class LeaseGenerationService:
                 if line.upper() == 'SIGNATURES' or (line.upper().startswith('SIGNATURE') and ':' not in line):
                     in_signature_section = True
                     section_number += 1
-                    html_parts.append(f'<div style="font-weight: bold; margin-top: 20px; margin-bottom: 3px; font-size: 11pt;"><strong>{section_number}. {line_escaped}</strong></div>')
+                    html_parts.append(f'<div style="font-weight: bold; margin-top: 20px; margin-bottom: 3px; font-size: 10pt;"><strong>{section_number}. {line_escaped}</strong></div>')
                     continue
                 
                 # Check if it's a major section heading
@@ -622,27 +622,27 @@ class LeaseGenerationService:
                         rest_escaped = rest.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                         
                         if rest:
-                            html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 11pt;"><strong>{section_number}. {bold_part_escaped}</strong> {rest_escaped}</div>')
+                            html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{section_number}. {bold_part_escaped}</strong> {rest_escaped}</div>')
                         else:
-                            html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 11pt;"><strong>{section_number}. {bold_part_escaped}</strong></div>')
+                            html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{section_number}. {bold_part_escaped}</strong></div>')
                     else:
-                        html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 11pt;"><strong>{section_number}. {line_escaped}</strong></div>')
+                        html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{section_number}. {line_escaped}</strong></div>')
                     
                 elif in_signature_section:
                     # In signature section
                     if 'Owner' in line or 'Representative' in line or 'Tenant' in line or 'Date:' in line:
                         # Check if it's just "Date:" on its own line (without underscore)
                         if line.strip() == 'Date:':
-                            html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 11pt;"><span style="font-weight: bold;">{line_escaped}</span></div>')
+                            html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 10pt;"><span style="font-weight: bold;">{line_escaped}</span></div>')
                         elif ':' in line and '_' in line:
                             parts = line.split(':', 1)
                             label = parts[0].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                             rest = parts[1].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                            html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 11pt;"><span style="font-weight: bold;">{label}:</span>{rest}</div>')
+                            html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 10pt;"><span style="font-weight: bold;">{label}:</span>{rest}</div>')
                         else:
-                            html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 11pt;">{line_escaped}</div>')
+                            html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 10pt;">{line_escaped}</div>')
                     else:
-                        html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 11pt;">{line_escaped}</div>')
+                        html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 10pt;">{line_escaped}</div>')
                 else:
                     # Regular body text - check for markdown-style bold markers
                     # Convert **TEXT:** to proper HTML bold (same font size, just bold)
@@ -659,14 +659,14 @@ class LeaseGenerationService:
                             
                             # Use inline styling for body text with bold (same size as body)
                             if rest_text:
-                                html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 11pt;"><strong style="font-size: 11pt;">{header_escaped}</strong> {rest_escaped}</div>')
+                                html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 10pt;"><strong style="font-size: 10pt;">{header_escaped}</strong> {rest_escaped}</div>')
                             else:
-                                html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 11pt;"><strong style="font-size: 11pt;">{header_escaped}</strong></div>')
+                                html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 10pt;"><strong style="font-size: 10pt;">{header_escaped}</strong></div>')
                             continue
                     
                     # Remove any remaining ** markers and render as body text
                     cleaned_line = line_escaped.replace('**', '')
-                    html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 11pt;">{cleaned_line}</div>')
+                    html_parts.append(f'<div style="margin-bottom: 3px; text-align: left; font-size: 10pt;">{cleaned_line}</div>')
             
             # Close HTML
             html_parts.append('''
@@ -682,39 +682,58 @@ class LeaseGenerationService:
     
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the AI model"""
-        return """Expert legal document specialist. Generate COMPLETE, CONCISE residential/commercial lease agreements.
+        return """Expert legal document specialist. Generate COMPLETE, DETAILED residential/commercial lease agreements.
 
 REQUIREMENTS:
-- Length: 800-1200 words (2-3 pages MAX)
-- Format: Plain text only - NO markdown, NO **, NO special formatting
-- Complete document in single response with ALL sections through SIGNATURES
-- Each section: 1-2 sentences maximum
-- USE EXACT DATA FROM PROMPT - no random or placeholder values
+Length: 1600-2000 words (3-4 pages)
+Format: Plain text only, NO markdown, NO ** or special formatting
+Complete document in single response with ALL sections through SIGNATURES
+Each section: 4-6 sentences with comprehensive details in PARAGRAPH form
+USE EXACT DATA FROM PROMPT, no random or placeholder values
 
 STRUCTURE:
 1. Title: RESIDENTIAL LEASE AGREEMENT or COMMERCIAL LEASE AGREEMENT
-2. Initial fields (NO numbering):
+2. Initial fields (NO numbering, these are BOLD headers):
    PARTIES:
    LANDLORD: [exact name from prompt]
    TENANT(S): [exact names from prompt]
-   PROPERTY ADDRESS: [exact address from prompt]
-3. Main sections (plain text, NO **, headers in lowercase with colon): Rental Amount: | Term: | Security Deposits: | Utilities: | Late Fees: | Maintenance and Repairs: | Pets: | Occupancy: | Entry and Access: | Termination: | Governing Law: | Entire Agreement: | Signatures
+   PROPERTY: [Complete property description in single flowing paragraph format. Example: "The leased premises is a 2200 square foot, 4-bedroom, 3-bathroom residential unit located at 2847 Riverfront Drive, Unit 15, Sacramento, California 95814, known as Riverside Garden Townhomes." DO NOT use line-by-line format with "Property Name:", "Address:", "Unit Number:", etc.]
+   LEASE TERM: [Complete lease term details in single flowing paragraph format]
+3. Main sections (plain text, headers in lowercase with colon): Rental Amount: | Security Deposits: | Utilities: | Late Fees: | Maintenance and Repairs: | Pets: | Occupancy: | Entry and Access: | Termination: | Governing Law: | Entire Agreement: | Signatures
+
+ABSOLUTE PROHIBITION ON BULLET POINTS AND LISTS:
+NEVER use bullet points, dashes, asterisks, or any list formatting (-, *, •, ◦, ▪)
+NEVER start lines with hyphens or symbols
+Write ALL content in flowing paragraph format
+When listing items, use inline comma-separated format within sentences
+Example CORRECT: "Tenant is responsible for Electricity (actual costs), Gas (actual costs), Water (100% of actual monthly costs), Sewer (actual costs), Trash Collection at $45.00 monthly, and Internet/Cable."
+Example WRONG: "- Electricity (actual costs)" or "* Gas (actual costs)"
 
 CRITICAL FORMATTING RULES:
-- NO markdown formatting - NO ** or __ or any special characters
-- Section headers: Plain text lowercase like "Rental Amount:" NOT "**RENTAL AMOUNT:**" or "RENTAL AMOUNT:"
-- PARTIES: must be on its own line with NOTHING after the colon - completely blank
-- Example correct format:
+NO markdown formatting, NO ** or __ or special characters anywhere
+Section headers: Plain text lowercase like "Rental Amount:" NOT "**RENTAL AMOUNT:**"
+PARTIES: must be on its own line with NOTHING after the colon, completely blank
+Example correct format:
   PARTIES:
   LANDLORD: Riverside Properties Inc.
   
-- NO underscore lines anywhere EXCEPT in signature section
-- Headers: Lowercase with colon, plain text (e.g., "Rental Amount:" not "**RENTAL AMOUNT:**" or "RENTAL AMOUNT:")
-- Body: Normal case, professional
-- No blank lines between sections
-- Use EXACT amounts, dates, names, and addresses from prompt
+PROPERTY: BOLD header (ALL CAPS), write description as single flowing paragraph, NOT line-by-line list format
+Example CORRECT: "PROPERTY: The leased premises is a 2200 square foot, 4-bedroom, 3-bathroom residential unit located at 2847 Riverfront Drive, Unit 15, Sacramento, California 95814, known as Riverside Garden Townhomes."
+Example WRONG: "PROPERTY:\nProperty Name: Riverside Garden Townhomes\nAddress: 2847 Riverfront Drive"
+
+LEASE TERM: BOLD header (ALL CAPS), write term details as single flowing paragraph
+Example CORRECT: "LEASE TERM: This lease shall commence on January 1, 2024 and continue for a period of twelve (12) months, terminating on December 31, 2024."
+
+NO underscore lines anywhere EXCEPT in signature section
+Headers: Lowercase with colon, plain text (e.g., "Rental Amount:" not "RENTAL AMOUNT:")
+Body: Normal case, professional, in paragraph format only
+No blank lines between sections
+Use EXACT amounts, dates, names, and addresses from prompt
+ALL sections must be in flowing paragraph format, never line-by-line lists
 
 SIGNATURE SECTION FORMAT (ONLY place with underscores):
+  SIGNATURE
+  
   LANDLORD/OWNER:
   Signature: _______________________________
   Print Name: [exact name]
@@ -725,7 +744,7 @@ SIGNATURE SECTION FORMAT (ONLY place with underscores):
   Print Name: [exact name]
   Date: _______________________________
 
-IMPORTANT: Do NOT fill in the date field - leave it as blank underscore line on SAME line as "Date:". The date will be filled in manually when signed.
+IMPORTANT: Include "SIGNATURE" as a header before the signature section. Do NOT fill in the date field - leave it as blank underscore line on SAME line as "Date:". The date will be filled in manually when signed.
 
 Generate complete, brief, professional lease now."""
 
@@ -858,6 +877,6 @@ Grace Period: {financials.base_rent.grace_period_days or 0} days"""
 
 === GENERATE COMPLETE {metadata.lease_type.upper()} LEASE ===
 
-Use all details above. 800-1200 words. Plain text, no blank lines between sections. 1-2 sentences per section. Generate now:"""
+Use all details above. 800-1200 words. Plain text, no blank lines between sections. Generate now:"""
 
         return prompt
