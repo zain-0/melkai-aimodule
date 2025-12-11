@@ -21,7 +21,9 @@ from app.models import (
     MaintenanceChatRequest,
     MaintenanceChatResponse,
     LeaseGenerationRequestWrapper,
-    LeaseGenerationResponse
+    LeaseGenerationResponse,
+    EmailRewriteRequest,
+    EmailRewriteResponse
 )
 from app.analyzer import LeaseAnalyzer
 from app.bedrock_client import BedrockClient
@@ -1297,6 +1299,81 @@ async def generate_lease(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate lease: {str(e)}"
+        )
+
+
+@app.post("/rewrite-email", response_model=EmailRewriteResponse)
+async def rewrite_as_email(request: EmailRewriteRequest):
+    """
+    Rewrite provided text in professional email format using AI.
+    
+    Args:
+        request: EmailRewriteRequest containing text to rewrite
+        
+    Returns:
+        EmailRewriteResponse with rewritten email content and subject line
+    """
+    try:
+        logger.info(f"Rewriting text as email (length: {len(request.text)})")
+        
+        # Initialize Bedrock client
+        bedrock_client = BedrockClient()
+        
+        # Create prompt for email rewriting
+        system_prompt = """You are a professional email writing assistant. Your task is to rewrite provided text into a well-formatted, professional email.
+
+REQUIREMENTS:
+1. Create a clear, concise subject line
+2. Use professional business email format with proper greeting and closing
+3. Maintain the core message and intent of the original text
+4. Use clear, polite, and professional language
+5. Organize information logically with proper paragraphs
+6. Keep it concise while being complete
+
+OUTPUT FORMAT:
+Subject: [Clear subject line]
+
+[Email body with greeting, content, and closing]
+
+Do NOT add any explanations, notes, or commentary outside the email format."""
+
+        user_prompt = f"""Rewrite the following text as a professional email:
+
+{request.text}"""
+
+        # Call Claude Haiku model
+        response = bedrock_client.generate_text(
+            model_id=settings.FREE_MODEL,  # Claude 3.5 Haiku
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=2000,
+            temperature=0.3
+        )
+        
+        # Extract email content
+        email_content = response.strip()
+        
+        # Extract subject line if present
+        subject = None
+        if email_content.startswith("Subject:"):
+            lines = email_content.split("\n", 1)
+            subject = lines[0].replace("Subject:", "").strip()
+            email_content = lines[1].strip() if len(lines) > 1 else email_content
+        
+        logger.info(f"Successfully rewrote text as email (subject: {subject})")
+        
+        return EmailRewriteResponse(
+            original_text=request.text,
+            email_content=email_content,
+            subject=subject,
+            status="success"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error rewriting email: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to rewrite email: {str(e)}"
         )
 
 

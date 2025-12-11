@@ -2334,3 +2334,49 @@ Set suggestTicket to true when:
         except Exception as e:
             logger.error(f"Error in maintenance chat: {str(e)}")
             raise AIModelError(message="Failed to process chat message", details=str(e))
+    
+    def generate_text(
+        self,
+        model_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 2000,
+        temperature: float = 0.3
+    ) -> str:
+        """
+        Generate text using specified Bedrock model
+        
+        Args:
+            model_id: Bedrock model identifier
+            system_prompt: System instructions for the model
+            user_prompt: User message/prompt
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature (0.0-1.0)
+            
+        Returns:
+            Generated text response
+            
+        Raises:
+            AIModelError: If generation fails
+        """
+        try:
+            body = self._format_messages_for_bedrock(
+                model_id=model_id,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt
+            )
+            
+            # Add max_tokens and temperature to body
+            if "anthropic" in model_id.lower():
+                body["max_tokens"] = max_tokens
+                body["temperature"] = temperature
+            elif "meta.llama" in model_id.lower():
+                body["max_gen_len"] = max_tokens
+                body["temperature"] = temperature
+            
+            response_text, _ = self._call_bedrock_with_retry(model_id, body)
+            return response_text
+            
+        except Exception as e:
+            logger.error(f"Error generating text: {str(e)}")
+            raise AIModelError(message="Failed to generate text", details=str(e))

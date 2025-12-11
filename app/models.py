@@ -44,6 +44,19 @@ class ViolationCategory(str, Enum):
     OTHERS = "others"
 
 
+class EmailRewriteRequest(BaseModel):
+    """Request to rewrite text in email format"""
+    text: str = Field(..., description="Text to be rewritten as an email")
+
+
+class EmailRewriteResponse(BaseModel):
+    """Response with rewritten email"""
+    original_text: str
+    email_content: str
+    subject: Optional[str] = None
+    status: str = "success"
+
+
 class MaintenanceResponse(BaseModel):
     """Landlord's response to maintenance request evaluated against lease"""
     maintenance_request: str  # Original request from tenant
