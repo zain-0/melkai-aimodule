@@ -272,7 +272,7 @@ class LeaseGenerationService:
             # Format request body for Claude on Bedrock
             body = json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 16000,  # Increased for complete lease generation with full details
+                "max_tokens": 8000,  # Reduced for shorter 2-3 page leases
                 "temperature": 0.3,
                 "system": self._get_system_prompt(),
                 "messages": [
@@ -688,15 +688,15 @@ class LeaseGenerationService:
     
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the AI model"""
-        return """You are an expert legal document specialist with extensive experience in drafting residential and commercial lease agreements. Your role is to create PROFESSIONAL, LEGALLY SOUND, and COMPLETE lease documents that:
+        return """You are an expert legal document specialist with extensive experience in drafting residential and commercial lease agreements. Your role is to create PROFESSIONAL, LEGALLY SOUND, and CONCISE lease documents that:
 
-1. Are CONCISE yet COMPREHENSIVE - target 2-3 pages (approximately 1000-1500 words)
+1. Are CONCISE and STREAMLINED - STRICT TARGET: 2-3 pages MAXIMUM (approximately 800-1200 words total)
 2. Comply with all applicable federal, state, and local laws
 3. Use clear, unambiguous legal language
-4. Include ALL necessary clauses and provisions without unnecessary verbosity
+4. Include ONLY the most essential clauses without excessive detail or verbosity
 5. Protect the interests of both landlord and tenant with balanced rights and obligations
-6. Follow the EXACT formatting and structure style of "Updated Lease Agreement.docx" template
-7. Include required legal notices and state-mandated disclosures
+6. Follow a simplified structure with brief, to-the-point sections
+7. Include required legal notices and state-mandated disclosures in condensed form
 8. Are professional, readable, and suitable for execution
 
 CRITICAL TEMPLATE REQUIREMENT:
@@ -851,13 +851,17 @@ You MUST generate the lease as clean, well-formatted plain text suitable for HTM
 
 GENERATE ONLY CLEAN PLAIN TEXT - No HTML, no markdown, no special formatting codes.
 
-CRITICAL DOCUMENT COMPLETENESS REQUIREMENTS:
-- Generate the COMPLETE lease agreement in a single response (2-3 pages)
+CRITICAL DOCUMENT LENGTH AND COMPLETENESS REQUIREMENTS:
+- STRICT MAXIMUM: 2-3 pages (800-1200 words) - This is NON-NEGOTIABLE
+- Generate the COMPLETE lease agreement in a single response
 - Do NOT stop mid-document under any circumstances
 - Do NOT ask if the user wants to continue
 - Do NOT use phrases like "[Continued...]", "[Note: This is part 1...]", or "[To be continued...]"
-- Write every section clearly and completely without excessive legal jargon
-- Keep provisions concise while maintaining legal enforceability
+- Write every section BRIEFLY and CONCISELY - use 1-2 sentences per section maximum
+- Eliminate ALL unnecessary legal jargon and verbose explanations
+- Combine related sections where possible to reduce length
+- Keep provisions ultra-concise while maintaining legal enforceability
+- PRIORITIZE BREVITY over comprehensive detail
 
 === TEMPLATE REFERENCE: "Updated Lease Agreement.docx" ===
 
@@ -1024,45 +1028,41 @@ FORMAT REQUIREMENTS:
 - Maintain conversational yet formal legal tone from template
 - Include ALL sections without omission
 
-CRITICAL SECTION ORDER (Write headers WITHOUT numbers - they're added automatically):
-- Title: RESIDENTIAL LEASE/RENTAL AGREEMENT (or COMMERCIAL LEASE/RENTAL AGREEMENT)
+STREAMLINED SECTION ORDER (Write headers WITHOUT numbers - only include ESSENTIAL sections):
+- Title: RESIDENTIAL LEASE (or COMMERCIAL LEASE)
 - PARTIES: (Landlord)
 - TENANT(S): (Tenant names)
 - PROPERTY ADDRESS:
-- RENTAL AMOUNT: (with payment details following)
-- TERM:
-- SECURITY DEPOSITS:
-- INITIAL PAYMENT: (if applicable)
-- OCCUPANTS:
-- SUBLETTING OR ASSIGNING:
-- UTILITIES:
-- PARKING:
-- CONDITION OF THE PREMISES:
-- ALTERATIONS:
-- LATE CHARGE/BAD CHECKS:
-- NOISE AND DISRUPTIVE ACTIVITIES:
-- LANDLORD'S RIGHT OF ENTRY:
-- REPAIRS BY LANDLORD:
-- PETS:
-- FURNISHINGS:
-- INSURANCE:
-- TERMINATION OF LEASE/RENTAL AGREEMENT:
-- POSSESSION:
-- ABANDONMENT:
-- WAIVER:
-- VALIDITY/SEVERABILITY:
-- NOTICES:
-- PERSONAL PROPERTY OF TENANT:
-- Lead-Based Paint Disclosure (or APPLICATION:)
-- NEIGHBORHOOD CONDITIONS:
-- DATABASE DISCLOSURE:
-- Keys:
-- Property Condition List:
-- Satellite Dishes:
-- ATTORNEY FEES:
-- ENTIRE AGREEMENT:
-- Final acknowledgments
+- RENTAL AMOUNT: (include payment method and due date - keep to 2-3 sentences)
+- TERM: (include start/end dates and renewal terms if applicable - 2 sentences max)
+- SECURITY DEPOSITS: (include amount and return conditions - 2 sentences max)
+- UTILITIES: (brief list of who pays what - 1-2 sentences)
+- LATE FEES: (brief penalty description - 1 sentence)
+- MAINTENANCE AND REPAIRS: (brief landlord/tenant responsibilities - 2 sentences max)
+- PETS: (allowed/not allowed with brief terms - 1 sentence)
+- OCCUPANCY: (max occupants and subletting rules - 1-2 sentences)
+- ENTRY AND ACCESS: (landlord entry rights - 1 sentence)
+- TERMINATION: (how lease can be terminated - 2 sentences max)
+- GOVERNING LAW: (state law jurisdiction - 1 sentence)
+- ENTIRE AGREEMENT: (standard clause - 1 sentence)
 - SIGNATURES
+
+OMIT THESE SECTIONS (not essential for 2-3 page lease):
+- Initial Payment (combine with Rental Amount)
+- Parking (mention briefly in Property Address if needed)
+- Condition of Premises (not essential)
+- Alterations (not essential)
+- Noise and Disruptive Activities (not essential)
+- Furnishings (not essential)
+- Insurance (not essential for short lease)
+- Possession, Abandonment, Waiver, Validity (not essential)
+- Personal Property (not essential)
+- Application, Neighborhood Conditions (not essential)
+- Database Disclosure (not essential)
+- Keys, Property Condition List (not essential)
+- Satellite Dishes (not essential)
+- Attorney Fees (not essential)
+- Notices (not essential)
 
 The final document should be COMPLETE, PROFESSIONAL, and match "Updated Lease Agreement.docx" structure precisely.
 
@@ -1199,31 +1199,31 @@ Grace Period: {financials.base_rent.grace_period_days or 0} days"""
 
 Generate a COMPLETE {metadata.lease_type.upper()} LEASE AGREEMENT that EXACTLY REPLICATES the format, structure, and style of "Updated Lease Agreement.docx" template.
 
-TARGET LENGTH: Can be 3-5 pages or more to match template completeness
+TARGET LENGTH: STRICT MAXIMUM 2-3 pages (800-1200 words) - NO EXCEPTIONS
 
 CRITICAL REQUIREMENTS:
 - Generate the ENTIRE lease in a SINGLE response including ALL sections through SIGNATURES
 - Do NOT stop mid-document or ask to continue
 - Do NOT use "[Continued...]" or similar phrases
 - MUST include complete SIGNATURE section at the end
-- FOLLOW THE EXACT STRUCTURE AND FORMATTING OF "Updated Lease Agreement.docx"
-- Match the template's section titles, numbering, and order precisely
-- Use the same heading styles, capitalization, and emphasis as the template
-- Replicate the template's language style, paragraph sizing, and clause construction
-- Fill in ALL specific details from the information below while maintaining template format
-- Keep the professional legal tone consistent with the template
-- Match paragraph lengths and formatting style from the template
+- FOLLOW A SIMPLIFIED, STREAMLINED STRUCTURE
+- Use brief section titles and concise content (1-2 sentences per section)
+- Eliminate verbose explanations and unnecessary legal elaboration
+- Combine sections where possible to save space
+- Use condensed language while maintaining legal validity
+- Keep each paragraph to 2-3 lines MAXIMUM
+- Prioritize essential information only - remove all "nice to have" clauses
 
-TEMPLATE MATCHING CHECKLIST:
-✓ Section order matches "Updated Lease Agreement.docx" exactly
-✓ Heading styles and capitalization match the template
-✓ Paragraph formatting and spacing replicate the template
-✓ Paragraph sizes match template style (not too short, not too long)
-✓ Date and currency formats match template style
-✓ Legal terminology and phrasing consistent with template
-✓ Signature block format identical to template
+BREVITY CHECKLIST:
+✓ Document is 2-3 pages MAXIMUM (800-1200 words)
+✓ Each section is 1-3 sentences only
+✓ No verbose explanations or unnecessary detail
+✓ Combined sections where possible
+✓ Eliminated all redundant clauses
+✓ Used condensed legal language
+✓ Removed "nice to have" provisions
 ✓ COMPLETE document with signature section at the end
-✓ Overall document structure mirrors the template perfectly
+✓ Professional but BRIEF throughout
 
 === SPECIFIC DETAILS TO INCLUDE ===
 
@@ -1276,21 +1276,21 @@ STATE COMPLIANCE:
 
 === GENERATION INSTRUCTIONS ===
 
-1. Use "Updated Lease Agreement.docx" as your MASTER TEMPLATE for structure and formatting
-2. Adapt for {'RESIDENTIAL' if metadata.lease_type.lower() == 'residential' else 'COMMERCIAL'} lease while maintaining template format
-3. Replace ALL placeholders with the specific information above
-4. Keep sections concise - match the paragraph length style of the template
-5. Use the EXACT section numbering/lettering system from the template
-6. Write in the same professional legal language style as the template
-7. Include signature blocks formatted exactly as in the template
-8. Generate document as long as needed to include all sections completely (can be 3-5 pages or more)
-9. Generate the COMPLETE document in this single response
+1. Create a STREAMLINED {'RESIDENTIAL' if metadata.lease_type.lower() == 'residential' else 'COMMERCIAL'} lease with simplified structure
+2. Replace ALL placeholders with the specific information above
+3. Keep ALL sections ULTRA-BRIEF (1-2 sentences each)
+4. Use simplified section numbering
+5. Write in concise, direct legal language
+6. Include brief signature blocks
+7. STRICT LIMIT: 2-3 pages MAXIMUM (800-1200 words)
+8. Prioritize essential clauses only - eliminate verbose or optional sections
+9. Generate the COMPLETE but BRIEF document in this single response
 
 PLAIN TEXT OUTPUT REQUIREMENTS - MANDATORY:
-Your response must be ONLY clean plain text that REPLICATES the visual appearance and structure of "Updated Lease Agreement.docx". Follow this structure:
+Your response must be ONLY clean plain text in a BRIEF, STREAMLINED format with ONLY essential sections. Follow this structure:
 
 ```
-                    RESIDENTIAL LEASE/RENTAL AGREEMENT
+                    RESIDENTIAL LEASE
 
 PARTIES: LANDLORD: [Actual landlord name]
 
@@ -1298,39 +1298,60 @@ TENANT(S): [Actual tenant names]
 
 PROPERTY ADDRESS: [Full property address]
 
-RENTAL AMOUNT: Commencing [date] TENANTS agree to pay LANDLORD the sum of $[amount] per month for this [X] Bedrooms, [X] Baths [property type] in advance
+RENTAL AMOUNT: Commencing [date] TENANTS agree to pay LANDLORD $[amount] per month, due on the [day] of each month. Payment shall be made to [payment location/method].
 
-[Continue with all sections in plain text format matching template structure]
+TERM: The lease term is [duration] commencing [start date] and ending [end date]. [Brief renewal terms if applicable - 1 sentence].
+
+SECURITY DEPOSITS: TENANT shall deposit $[amount] as security deposit. Deposit will be returned within [days] days after lease termination, less any deductions for damages.
+
+UTILITIES: [Brief list of who pays which utilities - 1-2 sentences].
+
+LATE FEES: Late payments shall incur a fee of [amount/percentage]. [Any NSF check fees - 1 sentence].
+
+MAINTENANCE AND REPAIRS: LANDLORD is responsible for major repairs and structural maintenance. TENANT is responsible for minor repairs under $[amount] and routine maintenance.
+
+PETS: [Pets allowed/not allowed with brief terms and any deposits/fees].
+
+OCCUPANCY: Maximum occupants: [number]. Subletting requires written landlord approval.
+
+ENTRY AND ACCESS: LANDLORD may enter premises with [hours] hours notice for inspections and repairs.
+
+TERMINATION: [Brief termination terms - notice requirements, early termination penalties if any].
+
+GOVERNING LAW: This lease is governed by the laws of [State].
+
+ENTIRE AGREEMENT: This document constitutes the entire agreement between parties and supersedes all prior agreements.
 
 SIGNATURES
 
-LANDLORD:
-[Name]
-
+LANDLORD: [Name]
 Signature: _______________________________  Date: ______________
 
-
-TENANT:
-[Name]
-
+TENANT: [Name]
 Signature: _______________________________  Date: ______________
 ```
 
+REMEMBER: MAXIMUM 2-3 pages (800-1200 words). Include ONLY the sections listed above. Keep EVERY section to 1-2 sentences.
+
 CRITICAL VALIDATION CHECKLIST:
 ✓ Plain text format only (no HTML, no markdown)
-✓ Section order and titles match the template exactly
+✓ MAXIMUM 2-3 pages (800-1200 words) - COUNT YOUR WORDS
+✓ Each section is 1-2 sentences MAXIMUM
 ✓ ALL CAPS for section headers
 ✓ Professional spacing and line breaks
 ✓ All data filled in (no blank underscores for values)
 ✓ Complete signature section at end
-✓ Clean, professional business document format
-✓ Visual appearance closely matches the .docx template when converted to PDF
+✓ Clean, BRIEF, professional business document format
+✓ NO verbose explanations or lengthy clauses
 
 DO NOT include any HTML tags, markdown syntax, or special formatting codes.
 DO NOT use ```text``` code blocks or any other wrapper.
 DO NOT forget proper line breaks and spacing.
-DO NOT deviate from "Updated Lease Agreement.docx" template structure.
+DO NOT write lengthy, verbose sections - keep EVERY section to 1-2 sentences.
+DO NOT exceed 2-3 pages (800-1200 words) under ANY circumstances.
 
-WRITE THE COMPLETE {metadata.lease_type.upper()} LEASE NOW AS CLEAN PLAIN TEXT MATCHING "Updated Lease Agreement.docx" FORMAT:"""
+⚠️ FINAL REMINDER: This lease MUST be 2-3 pages MAX. Write brief, concise sections. Eliminate all unnecessary text.
+
+WRITE THE COMPLETE BUT CONCISE {metadata.lease_type.upper()} LEASE NOW AS CLEAN PLAIN TEXT (2-3 PAGES MAX):"""
 
         return prompt
