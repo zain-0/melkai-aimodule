@@ -577,14 +577,14 @@ class LeaseGenerationService:
                             # PARTIES field should be completely blank - no underscore, even if AI added underscores
                             if 'PARTIES:' in bold_part_escaped:
                                 # Strip out any underscores the AI may have added
-                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong></div>')
+                                html_parts.append(f'<div style="margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong></div>')
                             elif rest and not rest.strip('_').strip():
                                 # If rest is only underscores or whitespace, don't include it
-                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong></div>')
+                                html_parts.append(f'<div style="margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong></div>')
                             elif rest:
-                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong> {rest_escaped}</div>')
+                                html_parts.append(f'<div style="margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong> {rest_escaped}</div>')
                             else:
-                                html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong></div>')
+                                html_parts.append(f'<div style="margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{bold_part_escaped}</strong></div>')
                         break
                 
                 if is_initial_field:
@@ -609,7 +609,7 @@ class LeaseGenerationService:
                             break
                 
                 if is_section_header and not in_signature_section:
-                    # This is a major section - add numbering and bold
+                    # This is a major section - add numbering and bold ONLY the header, not the content
                     section_number += 1
                     
                     if ':' in line:
@@ -622,11 +622,11 @@ class LeaseGenerationService:
                         rest_escaped = rest.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                         
                         if rest:
-                            html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{section_number}. {bold_part_escaped}</strong> {rest_escaped}</div>')
+                            html_parts.append(f'<div style="margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{section_number}. {bold_part_escaped}</strong> {rest_escaped}</div>')
                         else:
-                            html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{section_number}. {bold_part_escaped}</strong></div>')
+                            html_parts.append(f'<div style="margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{section_number}. {bold_part_escaped}</strong></div>')
                     else:
-                        html_parts.append(f'<div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{section_number}. {line_escaped}</strong></div>')
+                        html_parts.append(f'<div style="margin-top: 8px; margin-bottom: 3px; font-size: 10pt;"><strong>{section_number}. {line_escaped}</strong></div>')
                     
                 elif in_signature_section:
                     # In signature section
@@ -699,7 +699,7 @@ STRUCTURE:
    TENANT(S): [exact names from prompt]
    PROPERTY: [Complete property description in single flowing paragraph format. Example: "The leased premises is a 2200 square foot, 4-bedroom, 3-bathroom residential unit located at 2847 Riverfront Drive, Unit 15, Sacramento, California 95814, known as Riverside Garden Townhomes." DO NOT use line-by-line format with "Property Name:", "Address:", "Unit Number:", etc.]
    LEASE TERM: [Complete lease term details in single flowing paragraph format]
-3. Main sections (plain text, headers in lowercase with colon): Rental Amount: | Security Deposits: | Utilities: | Late Fees: | Maintenance and Repairs: | Pets: | Occupancy: | Entry and Access: | Termination: | Governing Law: | Entire Agreement: | Signatures
+3. Main sections (plain text, headers in UPPERCASE with colon): RENTAL AMOUNT: | SECURITY DEPOSITS: | UTILITIES: | LATE FEES: | MAINTENANCE AND REPAIRS: | PETS: | OCCUPANCY: | ENTRY AND ACCESS: | TERMINATION: | GOVERNING LAW: | ENTIRE AGREEMENT: | SIGNATURE
 
 ABSOLUTE PROHIBITION ON BULLET POINTS AND LISTS:
 NEVER use bullet points, dashes, asterisks, or any list formatting (-, *, •, ◦, ▪)
@@ -711,7 +711,7 @@ Example WRONG: "- Electricity (actual costs)" or "* Gas (actual costs)"
 
 CRITICAL FORMATTING RULES:
 NO markdown formatting, NO ** or __ or special characters anywhere
-Section headers: Plain text lowercase like "Rental Amount:" NOT "**RENTAL AMOUNT:**"
+Section headers: Plain text UPPERCASE like "RENTAL AMOUNT:" NOT "**RENTAL AMOUNT:**" or "Rental Amount:"
 PARTIES: must be on its own line with NOTHING after the colon, completely blank
 Example correct format:
   PARTIES:
@@ -725,7 +725,7 @@ LEASE TERM: BOLD header (ALL CAPS), write term details as single flowing paragra
 Example CORRECT: "LEASE TERM: This lease shall commence on January 1, 2024 and continue for a period of twelve (12) months, terminating on December 31, 2024."
 
 NO underscore lines anywhere EXCEPT in signature section
-Headers: Lowercase with colon, plain text (e.g., "Rental Amount:" not "RENTAL AMOUNT:")
+Headers: UPPERCASE with colon, plain text (e.g., "RENTAL AMOUNT:" not "rental amount:")
 Body: Normal case, professional, in paragraph format only
 No blank lines between sections
 Use EXACT amounts, dates, names, and addresses from prompt
