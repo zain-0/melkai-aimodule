@@ -418,6 +418,7 @@ class BedrockClient:
         "anthropic.claude-3-5-sonnet-20240620-v1:0": {"input": 3.0, "output": 15.0},
         "anthropic.claude-3-opus-20240229-v1:0": {"input": 15.0, "output": 75.0},
         "anthropic.claude-3-haiku-20240307-v1:0": {"input": 0.25, "output": 1.25},
+        "us.anthropic.claude-3-5-haiku-20241022-v1:0": {"input": 0.80, "output": 4.0},
         
         # Meta Llama
         "meta.llama3-1-405b-instruct-v1:0": {"input": 0.00532, "output": 0.016},
@@ -766,7 +767,7 @@ Return your analysis in the following JSON format:
         lease_info: LeaseInfo
     ) -> tuple[Dict[str, List[CategorizedViolation]], AnalysisMetrics, Optional[Dict[str, str]]]:
         """
-        Analyze lease for violations using specified model and categorize them.
+        Analyze lease for violations using Claude 3.5 Haiku and categorize them.
         
         Args:
             lease_info: Extracted lease information
@@ -774,44 +775,107 @@ Return your analysis in the following JSON format:
         Returns:
             Tuple of (violations by category dict, metrics, location dict extracted by model)
         """
-        # Use Llama 70B inference profile for categorized analysis
-        # Cross-region inference profiles provide on-demand access
-        model_name = "us.meta.llama3-1-70b-instruct-v1:0"
-        start_time = time.time()
+        # Try Claude 3.5 Haiku first, fallback to Llama 70B if not accessible
+        models_to_try = [
+            "us.anthropic.claude-3-5-haiku-20241022-v1:0",  # Best for consistency
+            "us.meta.llama3-1-70b-instruct-v1:0"  # Fallback if Claude not enabled
+        ]
         
-        try:
-            # Build categorized analysis prompt
-            prompt = self._build_categorized_prompt(lease_info)
+        start_time = time.time()
+        max_retries = 3
+        last_error = None
+        model_name = None
+        
+        # Try each model until one works
+        for model_to_test in models_to_try:
+            model_name = model_to_test
+            logger.info(f"Attempting categorized analysis with {model_name}")
             
-            # Format request for Bedrock
-            body = self._format_messages_for_bedrock(
-                model_id=model_name,
-                system_prompt="You are a legal AI that analyzes lease agreements. You MUST return ONLY valid, complete JSON. Never add explanatory text, markdown formatting, or code blocks. Focus on accuracy and completeness.",
-                user_prompt=prompt
-            )
+            for attempt in range(max_retries):
+                try:
+                    # Build categorized analysis prompt
+                    prompt = self._build_categorized_prompt(lease_info)
+                    
+                    # Format request for Bedrock with strict JSON instructions
+                    system_prompt = """You are a legal AI that analyzes lease agreements. 
+
+CRITICAL RULES:
+1. Return ONLY valid JSON - no markdown, no code blocks, no explanations
+2. Your response MUST start with { and end with }
+3. Never wrap JSON in ```json``` or ``` markers
+4. All string values must be properly escaped
+5. Confidence scores must be consistent and based on citation quality
+6. Extract exact lease clause text - never leave lease_clause empty
+
+Focus on accuracy, consistency, and completeness."""
+                    
+                    body = self._format_messages_for_bedrock(
+                        model_id=model_name,
+                        system_prompt=system_prompt,
+                        user_prompt=prompt
+                    )
+                    
+                    # Make API call
+                    response_text, tokens_used = self._call_bedrock_with_retry(model_name, body)
+                    
+                    # Parse violations and lease info with improved JSON extraction
+                    categorized_violations, lease_info_data = self._parse_categorized_violations(response_text)
+                    
+                    # Validate response has all required fields
+                    if self._validate_categorized_response(categorized_violations, lease_info_data):
+                        logger.info(f"Successfully completed analysis with {model_name}")
+                        break  # Success - exit retry loop
+                    else:
+                        logger.warning(f"Attempt {attempt + 1}: Invalid response structure, retrying...")
+                        last_error = Exception("Invalid response structure")
+                        if attempt < max_retries - 1:
+                            continue
+                        
+                except json.JSONDecodeError as e:
+                    last_error = e
+                    logger.warning(f"Attempt {attempt + 1}: JSON parse error: {str(e)}")
+                    if attempt < max_retries - 1:
+                        continue
+                    # If all retries fail, try next model
+                except AIModelError as e:
+                    # Check if it's an access denied error
+                    if "Access denied" in str(e) or "AccessDeniedException" in str(e):
+                        logger.warning(f"Access denied to {model_name}, trying next model...")
+                        last_error = e
+                        break  # Break inner loop to try next model
+                    else:
+                        last_error = e
+                        logger.error(f"Attempt {attempt + 1}: Error: {str(e)}")
+                        if attempt < max_retries - 1:
+                            time.sleep(1)
+                            continue
+                        break
+                except Exception as e:
+                    last_error = e
+                    logger.error(f"Attempt {attempt + 1}: Error in categorized analysis: {str(e)}")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)  # Brief delay before retry
+                        continue
+                    break
             
-            # Make API call
-            response_text, tokens_used = self._call_bedrock_with_retry(model_name, body)
-            
-            # Parse violations and lease info
-            categorized_violations, lease_info_data = self._parse_categorized_violations(response_text)
-            
-            # Calculate metrics
-            elapsed_time = time.time() - start_time
-            
-            # Count total violations
-            all_violations = []
-            for violations_list in categorized_violations.values():
-                all_violations.extend(violations_list)
-            
-            metrics = AnalysisMetrics(
-                model_name=model_name,
-                search_strategy=SearchStrategy.DUCKDUCKGO_SEARCH,  # Bedrock always uses DuckDuckGo
-                total_time_seconds=elapsed_time,
-                cost_usd=self._calculate_cost(model_name, tokens_used),
-                gov_citations_count=sum(
-                    len([c for c in v.citations if c.is_gov_site]) 
-                    for v in all_violations
+            # If successful, calculate metrics and exit model loop
+            if self._validate_categorized_response(categorized_violations, lease_info_data):
+                # Calculate metrics
+                elapsed_time = time.time() - start_time
+                
+                # Count total violations
+                all_violations = []
+                for violations_list in categorized_violations.values():
+                    all_violations.extend(violations_list)
+                
+                metrics = AnalysisMetrics(
+                    model_name=model_name,
+                    search_strategy=SearchStrategy.DUCKDUCKGO_SEARCH,  # Bedrock always uses DuckDuckGo
+                    total_time_seconds=elapsed_time,
+                    cost_usd=self._calculate_cost(model_name, tokens_used),
+                    gov_citations_count=sum(
+                        len([c for c in v.citations if c.is_gov_site]) 
+                        for v in all_violations
                 ),
                 total_citations_count=sum(len(v.citations) for v in all_violations),
                 violations_found=len(all_violations),
@@ -820,12 +884,14 @@ Return your analysis in the following JSON format:
                     c.law_reference for v in all_violations for c in v.citations
                 ),
                 tokens_used=tokens_used
-            )
-            
-            return categorized_violations, metrics, lease_info_data
-            
-        except Exception as e:
-            logger.error(f"Error in categorized analysis: {str(e)}")
+                )
+                
+                # Return successful result
+                return categorized_violations, metrics, lease_info_data
+        
+        # If we get here, all models failed
+        if last_error:
+            logger.error(f"All retries failed. Last error: {str(last_error)}")
             
             # Return empty result with error metrics
             elapsed_time = time.time() - start_time
@@ -844,13 +910,46 @@ Return your analysis in the following JSON format:
             
             return {}, metrics, None
     
+    def _validate_categorized_response(
+        self,
+        violations_by_category: Dict[str, List[CategorizedViolation]],
+        lease_info_data: Optional[Dict[str, str]]
+    ) -> bool:
+        """Validate that categorized response has all required fields and quality"""
+        required_categories = ["rent_increase", "tenant_owner_rights", "fair_housing_laws", "licensing", "others"]
+        
+        # Check all categories present
+        if not all(cat in violations_by_category for cat in required_categories):
+            logger.warning("Missing required categories")
+            return False
+        
+        # Validate each violation has required fields and quality
+        for category, violations in violations_by_category.items():
+            for v in violations:
+                # Check lease_clause is not empty
+                if not v.lease_clause or v.lease_clause.strip() == "":
+                    logger.warning(f"Empty lease_clause in {category}")
+                    return False
+                
+                # Check has at least one citation
+                if not v.citations or len(v.citations) == 0:
+                    logger.warning(f"No citations in {category}")
+                    return False
+                
+                # Check confidence score is reasonable
+                if v.confidence_score < 0.5 or v.confidence_score > 1.0:
+                    logger.warning(f"Invalid confidence score: {v.confidence_score}")
+                    return False
+        
+        return True
+    
     def _build_categorized_prompt(self, lease_info: LeaseInfo) -> str:
         """Build an optimized, concise categorized analysis prompt"""
         
         prompt = f"""Analyze this lease for landlord-tenant law violations.
 
 LEASE TEXT:
-{lease_info.full_text[:25000]}
+{lease_info.full_text[:60000]}
 
 TASK:
 1. Extract lease info (address, city, state, county, landlord, tenant, rent, deposit, duration)
@@ -859,11 +958,15 @@ TASK:
 4. For each violation: provide category, type, description, severity, confidence (0-1), **exact lease clause text** (REQUIRED), recommended_action (1-2 sentences), and .gov citations
 
 CRITICAL RULES:
+- Return ONLY the JSON object - your response MUST start with opening brace and end with closing brace
+- NO markdown code blocks - just raw JSON
 - "lease_clause" MUST contain exact quoted text from the lease (NEVER null/empty)
 - If no specific clause exists, quote the relevant section or write "General lease structure"
+- "confidence_score" must be consistent: 0.9+ for clear violations with .gov citations, 0.7-0.9 for moderate evidence, 0.5-0.7 for potential issues
 - All fields are REQUIRED except those marked "or null"
+- Ensure ALL citations are from .gov websites (state, county, city official sources)
 
-OUTPUT FORMAT (JSON only, no markdown, no extra text):
+OUTPUT FORMAT (raw JSON only - NO code blocks):
 {{
   "lease_info": {{
     "address": "string or null",
@@ -898,11 +1001,7 @@ OUTPUT FORMAT (JSON only, no markdown, no extra text):
   ]
 }}
 
-IMPORTANT: 
-- Return ONLY the JSON object
-- NO markdown code blocks
-- NO explanatory text before/after
-- Ensure valid, complete JSON
+REMEMBER: Your entire response must be ONLY the JSON object above. Start with opening brace and end with closing brace. No other text.
 """
         
         return prompt

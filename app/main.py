@@ -537,8 +537,7 @@ async def analyze_categorized(
     if result.error:
         raise AIModelError(
             message="AI categorization failed",
-            details=result.error,
-            suggestion="Try again or contact support if the issue persists"
+            details=result.error
         )
     
     return result

@@ -389,6 +389,9 @@ class LeaseAnalyzer:
             # Count total violations
             total_violations = sum(len(violations) for violations in violations_by_category.values())
             
+            # Remove full_text from response to reduce payload size
+            lease_info.full_text = ""
+            
             return CategorizedAnalysisResult(
                 model_name="mistralai/mistral-medium-3.1",
                 search_strategy=SearchStrategy.NATIVE_SEARCH,
