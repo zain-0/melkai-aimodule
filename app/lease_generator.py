@@ -698,18 +698,18 @@ STRUCTURE:
    LANDLORD: [exact name from prompt]
    TENANT(S): [exact names from prompt]
    PROPERTY ADDRESS: [exact address from prompt]
-3. Main sections (plain text, NO **, headers in ALL CAPS with colon): RENTAL AMOUNT: | TERM: | SECURITY DEPOSITS: | UTILITIES: | LATE FEES: | MAINTENANCE AND REPAIRS: | PETS: | OCCUPANCY: | ENTRY AND ACCESS: | TERMINATION: | GOVERNING LAW: | ENTIRE AGREEMENT: | SIGNATURES
+3. Main sections (plain text, NO **, headers in lowercase with colon): Rental Amount: | Term: | Security Deposits: | Utilities: | Late Fees: | Maintenance and Repairs: | Pets: | Occupancy: | Entry and Access: | Termination: | Governing Law: | Entire Agreement: | Signatures
 
 CRITICAL FORMATTING RULES:
 - NO markdown formatting - NO ** or __ or any special characters
-- Section headers: Plain text like "RENTAL AMOUNT:" NOT "**RENTAL AMOUNT:**"
+- Section headers: Plain text lowercase like "Rental Amount:" NOT "**RENTAL AMOUNT:**" or "RENTAL AMOUNT:"
 - PARTIES: must be on its own line with NOTHING after the colon - completely blank
 - Example correct format:
   PARTIES:
   LANDLORD: Riverside Properties Inc.
   
 - NO underscore lines anywhere EXCEPT in signature section
-- Headers: ALL CAPS with colon, plain text (e.g., "RENTAL AMOUNT:" not "**RENTAL AMOUNT:**")
+- Headers: Lowercase with colon, plain text (e.g., "Rental Amount:" not "**RENTAL AMOUNT:**" or "RENTAL AMOUNT:")
 - Body: Normal case, professional
 - No blank lines between sections
 - Use EXACT amounts, dates, names, and addresses from prompt
@@ -718,16 +718,14 @@ SIGNATURE SECTION FORMAT (ONLY place with underscores):
   LANDLORD/OWNER:
   Signature: _______________________________
   Print Name: [exact name]
-  Date:
-  _______________________________
+  Date: _______________________________
   
   TENANT:
   Signature: _______________________________
   Print Name: [exact name]
-  Date:
-  _______________________________
+  Date: _______________________________
 
-IMPORTANT: Do NOT fill in the date field - leave it as blank underscore line. The date will be filled in manually when signed.
+IMPORTANT: Do NOT fill in the date field - leave it as blank underscore line on SAME line as "Date:". The date will be filled in manually when signed.
 
 Generate complete, brief, professional lease now."""
 
