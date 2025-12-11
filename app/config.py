@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     
     # Model Configuration
     # Use cross-region inference profiles (us. prefix) for on-demand access
-    FREE_MODEL: str = "us.meta.llama3-1-70b-instruct-v1:0"  # Replacing Gemini
+    FREE_MODEL: str = "us.anthropic.claude-3-5-haiku-20241022-v1:0"  # Claude 3.5 Haiku - Fast and cost-effective for all APIs
     LEASE_GENERATOR_MODEL: str = "us.anthropic.claude-3-5-haiku-20241022-v1:0"  # Claude 3.5 Haiku - Fastest for lease generation
     
     # AWS Bedrock Models - All use DuckDuckGo search (no native search in Bedrock)
