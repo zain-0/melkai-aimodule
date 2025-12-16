@@ -61,9 +61,14 @@ class PDFParser:
         # Validate PDF bytes
         validate_pdf_bytes(pdf_bytes)
         
+        logger.info("="*80)
+        logger.info("STARTING PDF EXTRACTION")
+        logger.info(f"PDF size: {len(pdf_bytes)} bytes, Timeout: {timeout_seconds}s")
+        
         try:
             # Extract full text with timeout
             full_text = PDFParser._extract_text_with_timeout(pdf_bytes, timeout_seconds)
+            logger.info(f"Extracted {len(full_text)} characters from PDF")
             
             # Check if text was extracted
             if not full_text or not full_text.strip():
@@ -71,6 +76,8 @@ class PDFParser:
             
             # Return LeaseInfo with ONLY the full text
             # AI models will extract location, landlord, tenant, etc. from the text
+            logger.info("PDF extraction complete - AI will extract location from text")
+            logger.info("="*80)
             return LeaseInfo(
                 full_text=full_text,
                 address=None,

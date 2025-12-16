@@ -10,7 +10,7 @@ import time
 from typing import Tuple
 
 # Configuration
-API_HOST = "18.118.110.218"  # Your EC2 IP
+API_HOST = "18.119.209.125"  # Your EC2 IP
 API_PORT = "8000"
 HEALTH_ENDPOINT = f"http://{API_HOST}:{API_PORT}/health"
 DOCS_ENDPOINT = f"http://{API_HOST}:{API_PORT}/docs"

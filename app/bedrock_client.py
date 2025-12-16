@@ -794,7 +794,9 @@ Return your analysis in the following JSON format:
             for attempt in range(max_retries):
                 try:
                     # Build categorized analysis prompt
+                    logger.info(f"Building prompt for {model_name} (attempt {attempt + 1}/{max_retries})")
                     prompt = self._build_categorized_prompt(lease_info)
+                    logger.info(f"Prompt size: {len(prompt)} characters")
                     
                     # Format request for Bedrock with strict JSON instructions
                     system_prompt = """You are a legal AI that analyzes lease agreements. 
@@ -816,9 +818,12 @@ Focus on accuracy, consistency, and completeness."""
                     )
                     
                     # Make API call
+                    logger.info(f"Calling AWS Bedrock with {model_name}...")
                     response_text, tokens_used = self._call_bedrock_with_retry(model_name, body)
+                    logger.info(f"Received response: {len(response_text)} characters, tokens used: {tokens_used}")
                     
                     # Parse violations and lease info with improved JSON extraction
+                    logger.info("Parsing AI response for violations and location data...")
                     categorized_violations, lease_info_data = self._parse_categorized_violations(response_text)
                     
                     # Validate response has all required fields
@@ -1047,6 +1052,18 @@ REMEMBER: Your entire response must be ONLY the JSON object above. Start with op
             
             # Extract lease info
             lease_info_data = data.get("lease_info", {})
+            if lease_info_data:
+                logger.info("\n" + "="*80)
+                logger.info("AI EXTRACTED LOCATION & LEASE INFO:")
+                logger.info(f"  Location: {lease_info_data.get('city')}, {lease_info_data.get('state')} ({lease_info_data.get('county')} County)")
+                logger.info(f"  Address: {lease_info_data.get('address')}")
+                logger.info(f"  Landlord: {lease_info_data.get('landlord')}")
+                logger.info(f"  Tenant: {lease_info_data.get('tenant')}")
+                logger.info(f"  Rent: {lease_info_data.get('rent_amount')}")
+                logger.info(f"  Deposit: {lease_info_data.get('security_deposit')}")
+                logger.info(f"  Duration: {lease_info_data.get('lease_duration')}")
+                logger.info("AI used this location to search for .gov laws")
+                logger.info("="*80 + "\n")
             
             # Parse violations
             for v_data in data.get("violations", []):

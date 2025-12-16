@@ -3,7 +3,7 @@
 .PHONY: help deploy deploy-fast logs restart stop ssh clean build test
 
 # Configuration
-EC2_HOST := 18.118.110.218
+EC2_HOST := 18.119.209.125
 EC2_USER := ubuntu
 PEM_FILE := C:/Users/Zain/Downloads/agenticai_melkpm.pem
 APP_DIR := /home/ubuntu/melkai-aimodule

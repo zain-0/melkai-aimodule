@@ -88,7 +88,7 @@ cp .env.example .env
 .\deploy.ps1
 ```
 
-**That's it!** Your API will be available at: `http://18.118.110.218:8000/docs`
+**That's it!** Your API will be available at: `http://18.119.209.125:8000/docs`
 
 For detailed Docker deployment instructions, see:
 - **[QUICKSTART.md](QUICKSTART.md)** - Quick deployment guide

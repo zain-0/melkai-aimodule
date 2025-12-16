@@ -24,7 +24,7 @@ Comprehensive guide for deploying, updating, and troubleshooting the Lease Analy
 
 ### Connection
 ```powershell
-ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.118.110.218
+ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.119.209.125
 ```
 
 ### All-in-One Quick Update Script
@@ -41,18 +41,18 @@ Write-Host "📦 Package created" -ForegroundColor Cyan
 
 # Upload
 Write-Host "📤 Uploading to EC2..." -ForegroundColor Cyan
-scp -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" -r deploy_package/* ubuntu@18.118.110.218:~/melkai-aimodule/
+scp -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" -r deploy_package/* ubuntu@18.119.209.125:~/melkai-aimodule/
 Write-Host "✅ Upload complete" -ForegroundColor Green
 
 # Redeploy
 Write-Host "🔄 Redeploying on EC2..." -ForegroundColor Cyan
-ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.118.110.218 "cd ~/melkai-aimodule && sudo docker-compose down && sudo docker-compose build --no-cache && sudo docker-compose up -d"
+ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.119.209.125 "cd ~/melkai-aimodule && sudo docker-compose down && sudo docker-compose build --no-cache && sudo docker-compose up -d"
 Write-Host "✅ Redeploy complete" -ForegroundColor Green
 
 # Verify
 Start-Sleep -Seconds 15
 Write-Host "🔍 Testing health endpoint..." -ForegroundColor Cyan
-Invoke-RestMethod -Uri "http://18.118.110.218:8000/health"
+Invoke-RestMethod -Uri "http://18.119.209.125:8000/health"
 Write-Host "✅ API is healthy!" -ForegroundColor Green
 
 # Cleanup
@@ -65,7 +65,7 @@ Write-Host "API Docs: https://melkpm.duckdns.org/docs" -ForegroundColor Cyan
 
 ## Server Details
 
-- **IP Address**: `18.118.110.218`
+- **IP Address**: `18.119.209.125`
 - **Domain**: `melkpm.duckdns.org` (with SSL via Let's Encrypt)
 - **Port**: `8000`
 - **Region**: `us-east-2` (Ohio)
@@ -84,7 +84,7 @@ Write-Host "API Docs: https://melkpm.duckdns.org/docs" -ForegroundColor Cyan
 
 ### Required Files & Access
 - ✅ PEM Key: `C:\Users\Zain\Downloads\agenticai_melkpm.pem`
-- ✅ SSH access to EC2 (18.118.110.218)
+- ✅ SSH access to EC2 (18.119.209.125)
 - ✅ AWS IAM role attached to EC2 with Bedrock permissions
 - ✅ Security group allows TCP port 8000
 
@@ -134,7 +134,7 @@ Write-Host "✅ Deployment package created" -ForegroundColor Green
 
 ```powershell
 # Upload files (preserves existing .env on EC2)
-scp -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" -r deploy_package/* ubuntu@18.118.110.218:~/melkai-aimodule/
+scp -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" -r deploy_package/* ubuntu@18.119.209.125:~/melkai-aimodule/
 
 Write-Host "✅ Files uploaded to EC2" -ForegroundColor Green
 ```
@@ -142,7 +142,7 @@ Write-Host "✅ Files uploaded to EC2" -ForegroundColor Green
 ### Step 3: Rebuild and Restart
 
 ```powershell
-ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.118.110.218 "cd ~/melkai-aimodule && sudo docker-compose down && sudo docker-compose build --no-cache && sudo docker-compose up -d"
+ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.119.209.125 "cd ~/melkai-aimodule && sudo docker-compose down && sudo docker-compose build --no-cache && sudo docker-compose up -d"
 
 Write-Host "✅ Application redeployed!" -ForegroundColor Green
 ```
@@ -153,7 +153,7 @@ Write-Host "✅ Application redeployed!" -ForegroundColor Green
 Start-Sleep -Seconds 15
 
 # Test health endpoint
-Invoke-RestMethod -Uri "http://18.118.110.218:8000/health"
+Invoke-RestMethod -Uri "http://18.119.209.125:8000/health"
 
 # Open API docs
 Start-Process "https://melkpm.duckdns.org/docs"
@@ -174,7 +174,7 @@ Write-Host "✅ Update deployed successfully!" -ForegroundColor Green
 
 ```powershell
 # Windows PowerShell
-ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.118.110.218
+ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.119.209.125
 ```
 
 ### Step 2: Update System Packages
@@ -304,7 +304,7 @@ sudo systemctl reload nginx
 cd F:\AimTechAI\comparision-research-melk-ai
 
 # Upload project files
-scp -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" -r app requirements.txt Dockerfile docker-compose.yml ubuntu@18.118.110.218:~/melkai-aimodule/
+scp -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" -r app requirements.txt Dockerfile docker-compose.yml ubuntu@18.119.209.125:~/melkai-aimodule/
 ```
 
 **Option B: Using Git (on EC2)**
@@ -422,7 +422,7 @@ OR custom policy:
 
 ```
 AWS Console → EC2 → Instances
-Select instance: 18.118.110.218
+Select instance: 18.119.209.125
 Actions → Security → Modify IAM role
 Select: EC2-Bedrock-Access (or your role name)
 Update IAM role
@@ -432,7 +432,7 @@ Update IAM role
 
 ```bash
 # SSH to EC2
-ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.118.110.218
+ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.119.209.125
 
 # Check IAM role
 curl http://169.254.169.254/latest/meta-data/iam/security-credentials/
@@ -524,7 +524,7 @@ If you need to update Nginx timeouts:
 
 ```bash
 # SSH to EC2
-ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.118.110.218
+ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.119.209.125
 
 # Edit Nginx config
 sudo nano /etc/nginx/sites-available/melkpm.duckdns.org
@@ -549,7 +549,7 @@ sudo systemctl reload nginx
 
 ```powershell
 # From local machine
-Invoke-RestMethod -Uri "http://18.118.110.218:8000/health"
+Invoke-RestMethod -Uri "http://18.119.209.125:8000/health"
 
 # Expected response:
 # {
@@ -578,7 +578,7 @@ Write-Host $response
 
 ```bash
 # SSH to EC2
-ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.118.110.218
+ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.119.209.125
 
 # View real-time logs
 cd ~/melkai-aimodule
@@ -611,7 +611,7 @@ curl -X OPTIONS https://melkpm.duckdns.org/lease/generate \
 # POST /lease/generate with test_lease_request.json
 
 # Monitor in another terminal:
-ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.118.110.218
+ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.119.209.125
 cd ~/melkai-aimodule
 sudo docker-compose logs -f
 ```
@@ -630,7 +630,7 @@ sudo docker-compose logs -f
 **Diagnosis:**
 ```bash
 # SSH to EC2
-ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.118.110.218
+ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.119.209.125
 
 # Check Nginx timeout configuration
 sudo grep -r "proxy_read_timeout" /etc/nginx/sites-available/melkpm.duckdns.org
@@ -882,7 +882,7 @@ Write-Host $response
 ### View Real-time Logs
 
 ```bash
-ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.118.110.218
+ssh -i "C:\Users\Zain\Downloads\agenticai_melkpm.pem" ubuntu@18.119.209.125
 cd ~/melkai-aimodule
 sudo docker-compose logs -f
 ```
@@ -997,7 +997,7 @@ sudo systemctl restart nginx
 - **Base URL**: https://melkpm.duckdns.org
 - **API Docs**: https://melkpm.duckdns.org/docs
 - **Health Check**: https://melkpm.duckdns.org/health
-- **Direct IP**: http://18.118.110.218:8000
+- **Direct IP**: http://18.119.209.125:8000
 
 ✅ **Key Features:**
 - AWS Bedrock AI (Claude Sonnet 4.5)

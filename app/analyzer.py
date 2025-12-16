@@ -366,8 +366,17 @@ class LeaseAnalyzer:
             CategorizedAnalysisResult with violations organized by category
         """
         try:
+            logger.info("\n" + "="*80)
+            logger.info("STARTING CATEGORIZED ANALYSIS")
+            logger.info("="*80)
+            
             # Extract lease info from PDF
             lease_info = self.pdf_parser.extract_lease_info(pdf_bytes)
+            
+            logger.info("\n" + "="*80)
+            logger.info("CALLING AI FOR ANALYSIS (Claude 3.5 Haiku / Llama 70B)")
+            logger.info("AI will: 1) Extract location, 2) Search .gov laws, 3) Find violations")
+            logger.info("="*80)
             
             # Analyze with Mistral Medium 3.1 (categorized)
             violations_by_category, metrics, extracted_location = self.bedrock_client.analyze_lease_categorized(
@@ -375,7 +384,15 @@ class LeaseAnalyzer:
             )
             
             # Update lease_info with extracted data from AI
+            logger.info("\n" + "="*80)
+            logger.info("MERGING AI-EXTRACTED LOCATION DATA")
             if extracted_location:
+                logger.info(f"AI extracted location: {extracted_location.get('city')}, {extracted_location.get('state')} ({extracted_location.get('county')} County)")
+                logger.info(f"Address: {extracted_location.get('address')}")
+                logger.info(f"Landlord: {extracted_location.get('landlord')}")
+                logger.info(f"Tenant: {extracted_location.get('tenant')}")
+                logger.info(f"Rent: {extracted_location.get('rent_amount')}, Deposit: {extracted_location.get('security_deposit')}, Duration: {extracted_location.get('lease_duration')}")
+                
                 lease_info.address = extracted_location.get("address") or lease_info.address
                 lease_info.city = extracted_location.get("city") or lease_info.city
                 lease_info.state = extracted_location.get("state") or lease_info.state
@@ -385,9 +402,22 @@ class LeaseAnalyzer:
                 lease_info.rent_amount = extracted_location.get("rent_amount") or lease_info.rent_amount
                 lease_info.security_deposit = extracted_location.get("security_deposit") or lease_info.security_deposit
                 lease_info.lease_duration = extracted_location.get("lease_duration") or lease_info.lease_duration
+            else:
+                logger.warning("No location data extracted by AI")
+            logger.info("="*80)
             
             # Count total violations
             total_violations = sum(len(violations) for violations in violations_by_category.values())
+            
+            logger.info("\n" + "="*80)
+            logger.info("ANALYSIS COMPLETE - RESULTS SUMMARY")
+            logger.info(f"Total violations found: {total_violations}")
+            for category, violations in violations_by_category.items():
+                if violations:
+                    logger.info(f"  - {category}: {len(violations)} violation(s)")
+            logger.info(f"Analysis time: {metrics.total_time_seconds:.2f}s")
+            logger.info(f"Citations: {metrics.total_citations_count} total, {metrics.gov_citations_count} .gov")
+            logger.info("="*80 + "\n")
             
             # Remove full_text from response to reduce payload size
             lease_info.full_text = ""
