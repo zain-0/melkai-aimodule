@@ -20,6 +20,7 @@ from app.models import (
     MaintenanceWorkflow,
     MaintenanceChatRequest,
     MaintenanceChatResponse,
+    MaintenanceRequestExtraction,
     LeaseGenerationRequestWrapper,
     LeaseGenerationResponse,
     EmailRewriteRequest,
@@ -108,6 +109,9 @@ async def api_exception_handler(request, exc: APIException):
 # Initialize analyzer
 analyzer = LeaseAnalyzer()
 
+# Initialize Bedrock client (shared across all endpoints)
+bedrock_client = BedrockClient()
+
 # Initialize lease generator services
 legal_research_service = LegalResearchService()
 lease_generation_service = LeaseGenerationService()
@@ -149,7 +153,11 @@ def check_rate_limit(client_ip: str) -> bool:
 
 @app.get("/")
 async def root():
-    """Root endpoint with API information"""
+    """
+    API Root - Get available endpoints and service info
+    
+    Returns overview of all API endpoints and service metadata.
+    """
     return {
         "name": "Lease Violation Analyzer API",
         "version": "1.0.0",
@@ -173,10 +181,10 @@ async def root():
 @app.get("/models", response_model=list[ModelInfo])
 async def list_models():
     """
-    Get list of available models with pricing and capabilities
+    List all available AI models with pricing and capabilities
     
-    Returns:
-        List of ModelInfo objects
+    Returns pricing, speed, and feature info for all AWS Bedrock models.
+    Use this to choose the right model for your needs.
     """
     try:
         models = BedrockClient.get_available_models()
@@ -196,18 +204,13 @@ async def analyze_single(
     )
 ):
     """
-    Analyze a lease with a single model using native web search
+    Analyze lease with single AI model for violations
     
-    All models are instructed to search the web for relevant landlord-tenant laws.
-    Use the /analyze/duckduckgo endpoint if you prefer DuckDuckGo search instead.
+    Upload a lease PDF and select an AI model to analyze it against landlord-tenant laws.
+    Model searches the web for relevant laws and identifies potential violations.
     
-    Args:
-        file: PDF lease file
-        model_name: Model identifier (select from dropdown)
-        search_strategy: 'native_search' (default) or 'duckduckgo_search'
-        
-    Returns:
-        AnalysisResult with violations, citations, and performance metrics
+    **Example Response:** Violations found (e.g., illegal security deposit amount), 
+    lease clauses cited, government law citations, cost & time metrics.
     """
     try:
         # Validate file type
@@ -252,7 +255,13 @@ async def analyze_compare(
     file: UploadFile = File(..., description="PDF lease file to analyze")
 ):
     """
-    Analyze a lease with ALL available models using native web search
+    Compare ALL AI models - analyze lease with every available model
+    
+    Upload lease PDF to test ALL models simultaneously and compare results.
+    Get cost, speed, and accuracy comparison across Anthropic, Meta, Mistral models.
+    
+    **Use Case:** Find the best model for your specific lease analysis needs.
+    **Example:** See which model finds the most violations and costs least.
     
     This endpoint runs comprehensive benchmarking across all 19 configured models.
     Each model is instructed to search the web for relevant landlord-tenant laws.
@@ -366,16 +375,13 @@ async def analyze_by_provider(
     file: UploadFile = File(..., description="PDF lease file to analyze")
 ):
     """
-    Analyze a lease with all models from a specific provider
+    Analyze lease with all models from one provider
     
-    Available providers: openai, anthropic, google, meta, mistral, deepseek, qwen, perplexity
+    Compare all models from a specific provider (Anthropic, Meta, or Mistral).
+    Upload lease PDF and select provider to test all their models.
     
-    Args:
-        provider: Provider name (select from dropdown)
-        file: PDF lease file
-        
-    Returns:
-        ComparisonResult with analysis from all models of the specified provider
+    **Example:** Select 'anthropic' to compare Claude Opus, Sonnet, and Haiku.
+    **Use Case:** Find best model within your preferred provider.
     """
     try:
         provider_value = provider.value.lower()
@@ -501,7 +507,13 @@ async def analyze_categorized(
     file: UploadFile = File(..., description="PDF lease file to analyze")
 ):
     """
-    Analyze a lease with Mistral Medium 3.1 and categorize violations
+    Analyze lease with categorized violation breakdown
+    
+    Uses Mistral Medium to analyze lease and organize violations by category:
+    security deposits, rent terms, maintenance, termination, discrimination, etc.
+    
+    **Example Output:** Violations grouped by type with lease clauses and law citations.
+    **Use Case:** Get structured overview of all lease issues by category.
     
     This endpoint uses Mistral Medium 3.1 to analyze the lease and automatically
     categorize each violation into one of these categories:
@@ -550,39 +562,24 @@ async def evaluate_maintenance_request(
     landlord_notes: Optional[str] = Form(None, description="Optional notes from landlord (e.g., 'Already fixed last month', 'Tenant caused damage', 'Need to schedule inspection first')")
 ):
     """
-    Evaluate a maintenance request against the lease and approve or reject based on lease terms (FREE)
+    Evaluate maintenance request - Approve or reject based on lease (FREE)
     
-    Uses Llama 3.3 (FREE model) to:
-    - Review the lease to determine maintenance responsibilities
-    - Consider landlord's optional notes (if provided)
-    - APPROVE if lease says landlord must handle this type of maintenance
-    - REJECT if lease clearly states tenant is responsible
-    - Default to APPROVE if unclear or not mentioned (landlord's standard duty)
-    - Generate a professional response from the landlord's perspective
-    - Cite exact lease clauses that support the decision
+    Upload lease + maintenance request to get AI decision on landlord responsibility.
+    AI reviews lease, applies landlord's notes (if any), and generates professional response.
     
-    **Cost**: FREE ($0.00) - Uses Llama 3.3 free model
-    **The AI evaluates fairly based on lease + landlord's notes (if any).**
+    **Cost:** FREE ($0.00) - Uses Llama 3.3
+    **Decision:** APPROVED (landlord pays) or REJECTED (tenant pays)
     
-    Args:
-        file: PDF lease file
-        maintenance_request: The maintenance issue (e.g., "AC not working", "Leaking faucet", "Broken heater")
-        landlord_notes: Optional context from landlord (e.g., "Already repaired last week", "Caused by tenant misuse")
-        
-    Returns:
-        MaintenanceResponse with decision (approved/rejected) and lease justification
-        
-    Examples:
-        Request: "Broken heater"
-        If lease says "Landlord maintains heating systems" → APPROVED
-        Response: "We have received your maintenance request regarding the heating system. 
-                  Per Section 8.2 of the lease, we are responsible for maintaining heating systems. 
-                  We will schedule a repair within 48 hours."
-        
-        Request: "Broken dishwasher" 
-        If lease says "Tenant responsible for appliances" → REJECTED
-        Response: "After reviewing your request, Section 12.3 of the lease states that appliance 
-                  maintenance is the tenant's responsibility. Please arrange for repairs at your expense."
+    **Example 1:**
+    - Request: "Broken heater"
+    - Lease: "Landlord maintains HVAC"
+    - Result: APPROVED with response message citing lease Section 8.2
+    
+    **Example 2:**
+    - Request: "Broken dishwasher"
+    - Lease: "Tenant handles appliances"
+    - Landlord Notes: "Already fixed last month"
+    - Result: REJECTED with explanation citing lease terms
     """
     # Validate file type
     if not file.filename.endswith('.pdf'):
@@ -608,7 +605,6 @@ async def evaluate_maintenance_request(
     logger.info(f"Evaluating maintenance request: {validated_request[:50]}...")
     if validated_notes:
         logger.info(f"Landlord notes: {validated_notes[:100]}...")
-    bedrock_client = BedrockClient()
     result = bedrock_client.evaluate_maintenance_request(
         maintenance_request=validated_request,
         lease_info=lease_info,
@@ -625,45 +621,23 @@ async def generate_vendor_work_order(
     landlord_notes: Optional[str] = Form(None, description="Optional notes from landlord (e.g., 'Tenant says no heat for 2 days', 'Check HVAC filter first', 'Emergency - freezing temps')")
 ):
     """
-    Generate a professional work order for vendor/contractor to fix maintenance issue (FREE)
+    Generate vendor work order for maintenance issue (FREE)
     
-    Uses Llama 3.3 (FREE model) to:
-    - Extract property address and tenant info from lease
-    - Determine urgency level (routine, urgent, emergency)
-    - Create detailed, vendor-focused description (excludes financial details)
-    - Include access instructions and special notes
-    - Add any lease requirements about repairs
-    - Incorporate landlord's notes as context
+    Create professional work order for contractors with property details, urgency, and scope.
+    AI extracts info from lease and landlord notes to build complete work order.
     
-    **Cost**: FREE ($0.00) - Uses Llama 3.3 free model
-    **The AI creates a complete, professional work order ready to send to vendors.**
+    **Cost:** FREE ($0.00) - Uses Llama 3.3
+    **Output:** Ready-to-send work order with address, urgency, description
     
-    Args:
-        file: PDF lease file
-        maintenance_request: The maintenance issue (e.g., "Broken heater", "Leaking faucet", "AC not working")
-        landlord_notes: Optional context (e.g., "Emergency - no heat for 3 days", "Tenant available Mon-Fri 9-5")
-        
-    Returns:
-        VendorWorkOrder with all details vendor needs to quote and complete the work
-        
-    Examples:
-        Request: "Broken heater"
-        Landlord Notes: "No heat for 2 days, freezing temps outside"
-        → Work Order:
-          - Title: "Emergency Heating System Repair - 123 Main St"
-          - Urgency: "emergency"
-          - Description: "Heating system failure reported by tenant. No heat for 2 days 
-                        during freezing weather. Requires immediate HVAC inspection and repair."
-          - Special Notes: "Emergency situation - freezing temperatures"
-        
-        Request: "Leaking kitchen faucet"
-        Landlord Notes: "Tenant says it's dripping constantly"
-        → Work Order:
-          - Title: "Plumbing Repair - Kitchen Faucet Leak"
-          - Urgency: "urgent"
-          - Description: "Kitchen faucet is leaking constantly. Requires plumbing assessment 
-                        and repair or replacement."
-          - Special Notes: "Constant dripping - may need faucet replacement"
+    **Example 1:**
+    - Request: "Broken heater"
+    - Notes: "No heat for 2 days, freezing temps"
+    - Result: Emergency work order with HVAC details and urgency flag
+    
+    **Example 2:**
+    - Request: "Leaking faucet"
+    - Notes: "Dripping constantly"
+    - Result: Urgent plumbing work order with scope details
     """
     # Validate file type
     if not file.filename.endswith('.pdf'):
@@ -689,7 +663,6 @@ async def generate_vendor_work_order(
     logger.info(f"Generating vendor work order for: {validated_request[:50]}...")
     if validated_notes:
         logger.info(f"Landlord notes: {validated_notes[:100]}...")
-    bedrock_client = BedrockClient()
     result = bedrock_client.generate_vendor_work_order(
         maintenance_request=validated_request,
         lease_info=lease_info,
@@ -706,14 +679,22 @@ async def maintenance_workflow(
     landlord_notes: Optional[str] = Form(None, description="Optional notes from landlord (e.g., 'Emergency - no heat for 3 days', 'Tenant caused damage')")
 ):
     """
-    Complete maintenance workflow: Evaluate request against lease + Generate messages for tenant and vendor (FREE)
+    Complete maintenance workflow - Evaluate + Tenant message + Vendor order (FREE)
     
-    This is a combined endpoint that provides everything you need in one call:
+    One-stop endpoint that handles entire maintenance workflow in single call.
     
-    **What it does:**
-    1. **Evaluates maintenance request** against the lease agreement
-    2. **Generates professional message to tenant** (approved or rejected with explanation)
-    3. **Creates vendor work order** (ONLY if approved) ready to send to contractors
+    **What you get:**
+    1. Decision: Approved or rejected based on lease
+    2. Tenant message: Professional response for tenant
+    3. Vendor work order: Ready to send (if approved)
+    
+    **Cost:** FREE ($0.00) - Uses Llama 3.3
+    **Use Case:** Process maintenance request from start to finish instantly
+    
+    **Example:**
+    - Request: "AC not working"
+    - Lease: "Landlord maintains HVAC"
+    - Result: Approved + tenant approval message + vendor work order
     
     **Uses Llama 3.3 (FREE model)** for all processing - $0.00 cost
     
@@ -796,7 +777,6 @@ async def maintenance_workflow(
     if validated_notes:
         logger.info(f"Landlord notes: {validated_notes[:100]}...")
     
-    bedrock_client = BedrockClient()
     result = bedrock_client.process_maintenance_workflow(
         maintenance_request=validated_request,
         lease_info=lease_info,
@@ -813,45 +793,23 @@ async def evaluate_move_out_request(
     owner_notes: Optional[str] = Form(None, description="Optional notes from owner/landlord (e.g., 'Tenant still owes $200 in late fees', 'Property needs deep cleaning', 'Security deposit held for damages')")
 ):
     """
-    Evaluate tenant's move-out request against lease terms and calculate financial obligations (FREE)
+    Evaluate tenant move-out request and calculate financial obligations (FREE)
     
-    Uses Llama 3.3 (FREE model) to:
-    - Check if tenant gave proper notice per lease (30, 60, 90 days, etc.)
-    - Calculate final rent, security deposit refund, and any penalties
-    - Determine if move-out date is valid
-    - Review lease clauses about move-out procedures
-    - Account for owner's notes (unpaid rent, damages, fees)
-    - Provide professional response message for tenant
-    - List next steps (inspection, keys, forwarding address, etc.)
+    Check if tenant gave proper notice, calculate deposit refund, and generate response.
+    AI validates notice period, reviews lease terms, applies owner notes, calculates finances.
     
-    **Cost**: FREE ($0.00) - Uses Llama 3.3 free model
-    **The AI evaluates fairly based on lease terms + owner's notes.**
+    **Cost:** FREE ($0.00) - Uses Llama 3.3
+    **Output:** Approved/requires attention + financial summary + next steps
     
-    Args:
-        file: PDF lease file
-        move_out_request: Tenant's move-out notice (e.g., "I'm moving out on June 30th")
-        owner_notes: Optional context from owner (e.g., "Tenant owes $500 in repairs")
-        
-    Returns:
-        MoveOutResponse with:
-        - Decision: approved or requires_attention
-        - Notice period validation
-        - Financial summary (deposit refund, final rent, penalties)
-        - Professional response message for tenant
-        - Next steps for tenant
-        - Lease clauses cited
-        
-    Examples:
-        Request: "I want to move out on July 31st" (given on July 1st)
-        Lease says: "30-day notice required"
-        Response: APPROVED - Proper notice given. Security deposit of $1,500 
-                 will be refunded within 14 days after final inspection.
-        
-        Request: "Moving out in 2 weeks" (given on June 15th)
-        Lease says: "60-day notice required"
-        Response: REQUIRES ATTENTION - Insufficient notice. Lease requires 
-                 60 days. You may be responsible for rent until August 15th 
-                 or lose security deposit as penalty.
+    **Example 1:**
+    - Request: "Moving out July 31st" (given July 1st)
+    - Lease: "30-day notice required"
+    - Result: APPROVED - $1,500 deposit refund, next steps listed
+    
+    **Example 2:**
+    - Request: "Moving out in 2 weeks"
+    - Lease: "60-day notice", Owner Notes: "Owes $500"
+    - Result: REQUIRES ATTENTION - Insufficient notice, may forfeit deposit
     """
     # Validate file type
     if not file.filename.endswith('.pdf'):
@@ -877,7 +835,6 @@ async def evaluate_move_out_request(
     logger.info(f"Evaluating move-out request: {validated_request[:100]}...")
     if validated_notes:
         logger.info(f"Owner notes: {validated_notes[:100]}...")
-    bedrock_client = BedrockClient()
     result = bedrock_client.evaluate_move_out_request(
         move_out_request=validated_request,
         lease_info=lease_info,
@@ -892,53 +849,22 @@ async def rewrite_tenant_message(
     message: str = Body(..., embed=True, description="Tenant's original maintenance issue description")
 ):
     """
-    Rewrite tenant's maintenance message to be more professional and clear (FREE)
+    Rewrite tenant message to professional format (FREE)
     
-    This endpoint helps tenants communicate maintenance issues effectively to their landlords.
-    It uses AI (Llama 3.3 free model) to:
-    - Make the message more professional and polite
-    - Add structure (greeting, details, closing)
-    - Clarify vague descriptions
-    - Determine urgency level
-    - Suggest improvements made
+    Transform informal tenant messages into clear, professional maintenance requests.
+    AI adds structure, clarifies details, determines urgency.
     
-    Perfect for tenants who want to ensure their maintenance requests are:
-    - Clear and specific
-    - Professionally written
-    - Properly structured
-    - Appropriately urgent
+    **Cost:** FREE ($0.00) - Uses Llama 3.3
     
-    **Cost**: FREE ($0.00) - Uses Llama 3.3 free model
-    
-    **Request Body (JSON):**
+    **Request Body:**
     ```json
-    {
-        "message": "heater broke"
-    }
+    {"message": "heater broke"}
     ```
     
-    Args:
-        message: The tenant's original message (can be informal, brief, or vague)
-        
-    Returns:
-        TenantMessageRewrite with:
-        - original_message: What the tenant typed
-        - rewritten_message: AI-improved professional version
-        - improvements_made: List of specific improvements
-        - tone: The tone of the rewritten message
-        - estimated_urgency: routine/urgent/emergency
-        
-    Example:
-        Input: "heater broke"
-        Output: 
-          - Rewritten: "Hello, I wanted to report that the heating system in my unit 
-            stopped working as of this morning. The unit is not producing any heat, 
-            and with temperatures dropping, this is becoming uncomfortable. I would 
-            appreciate it if you could arrange for a repair as soon as possible. 
-            Thank you for your attention to this matter."
-          - Improvements: ["Added greeting and closing", "Specified timing", 
-            "Explained impact", "Professional tone"]
-          - Urgency: "urgent"
+    **Example:**
+    - Input: "heater broke"
+    - Output: Professional message with greeting, details, urgency (urgent)
+    - Improvements: Added context, specified timing, polite tone
     """
     # Validate input
     validated_message = validate_tenant_message(message)
@@ -946,7 +872,6 @@ async def rewrite_tenant_message(
     logger.info(f"Rewriting tenant message: {validated_message[:100]}...")
     
     # Rewrite message using AI
-    bedrock_client = BedrockClient()
     result = bedrock_client.rewrite_tenant_message(
         tenant_message=validated_message
     )
@@ -962,10 +887,26 @@ async def maintenance_chat(
     chat_request: MaintenanceChatRequest
 ):
     """
-    Maintenance Assistant Chatbot - Get help with property maintenance issues (FREE)
+    Tenant chatbot - Troubleshoot maintenance issues interactively (FREE)
     
-    This endpoint provides an AI-powered maintenance assistant that helps tenants troubleshoot
-    common property issues before creating a maintenance ticket. The assistant:
+    AI assistant helps tenants troubleshoot issues before creating tickets.
+    Provides step-by-step guidance, asks clarifying questions, suggests when to submit ticket.
+    
+    **Cost:** FREE ($0.00) - Uses Claude Haiku (fast)
+    
+    **Request Body:**
+    ```json
+    {
+      "conversationHistory": [
+        {"role": "user", "content": "My shower is leaking"},
+        {"role": "assistant", "content": "..."},
+        {"role": "user", "content": "Yes, even when turned off"}
+      ]
+    }
+    ```
+    
+    **Example:** Tenant describes issue → AI asks questions → Suggests troubleshooting → 
+    Determines if ticket needed → Sets suggestTicket: true when ready
     
     - **Provides step-by-step troubleshooting** for plumbing, electrical, HVAC, appliances, doors/windows
     - **Asks clarifying questions** to understand the issue better
@@ -1084,7 +1025,6 @@ async def maintenance_chat(
     
     try:
         # Process chat request
-        bedrock_client = BedrockClient()
         result = bedrock_client.maintenance_chat(
             conversation_history=chat_request.conversationHistory
         )
@@ -1104,26 +1044,78 @@ async def maintenance_chat(
         )
 
 
+@app.post("/tenant/extract-request", response_model=MaintenanceRequestExtraction)
+async def extract_maintenance_request(
+    chat_request: MaintenanceChatRequest
+):
+    """
+    Extract title & description from chat for maintenance ticket (FREE)
+    
+    Call after tenant chat ends to get structured maintenance request.
+    AI analyzes full conversation and extracts concise title + detailed description.
+    
+    **Cost:** FREE ($0.00) - Uses Claude Haiku (fast, 1-2 seconds)
+    **When to use:** After tenant finishes chatting and is ready to submit ticket
+    
+    **Request Body:**
+    ```json
+    {
+      "conversationHistory": [
+        {"role": "user", "content": "My shower is leaking"},
+        {"role": "assistant", "content": "Where is it leaking from?"}
+      ]
+    }
+    ```
+    
+    **Example Output:**
+    - title: "Main bathroom shower head leaking with low pressure" (max 80 chars)
+    - description: "The shower head in main bathroom is broken and leaking even when off..."
+    """
+    try:
+        # Validate conversation history
+        if not chat_request.conversationHistory or len(chat_request.conversationHistory) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Conversation history is required"
+            )
+        
+        logger.info(f"Extracting maintenance request from {len(chat_request.conversationHistory)} messages")
+        
+        # Extract using Haiku
+        result = bedrock_client.extract_maintenance_request_from_chat(
+            conversation_history=chat_request.conversationHistory
+        )
+        
+        logger.info(f"Extracted request - Title: {result.title}")
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error extracting maintenance request: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Extraction failed",
+                "message": "Unable to extract maintenance request from conversation",
+                "suggestion": "Ensure conversation history contains maintenance-related discussion"
+            }
+        )
+
+
 @app.post("/analyze/duckduckgo", response_model=AnalysisResult)
 async def analyze_with_duckduckgo(
     file: UploadFile = File(..., description="PDF lease file to analyze"),
     model_name: ModelEnum = Form(..., description="Model to use for analysis")
 ):
     """
-    Analyze a lease using DuckDuckGo search + any model (OPTIONAL FALLBACK)
+    Analyze lease using DuckDuckGo search (Optional alternative method)
     
-    This endpoint uses DuckDuckGo to search for landlord-tenant laws from .gov sites,
-    then provides the search results to the selected model for analysis.
+    Uses DuckDuckGo to search .gov sites for laws, then provides results to AI model.
+    Alternative to native search - use /analyze/single for default approach.
     
-    Most models can search the web themselves - use /analyze/single for native web search.
-    This endpoint is for users who specifically want to test the DuckDuckGo approach.
-    
-    Args:
-        file: PDF lease file
-        model_name: Model identifier (select from dropdown)
-        
-    Returns:
-        AnalysisResult with violations, citations, and performance metrics
+    **Use Case:** Test DuckDuckGo search method vs native model search
+    **Example:** Upload lease + select model → AI analyzes with DuckDuckGo law search
     """
     try:
         # Validate file type
@@ -1167,10 +1159,9 @@ async def analyze_with_duckduckgo(
 @app.get("/providers")
 async def list_providers():
     """
-    Get list of available providers with model counts
+    List all AI providers and their available models
     
-    Returns:
-        Dict of providers and their available models
+    Returns providers (Anthropic, Meta, Mistral) with model counts and IDs.
     """
     providers = {}
     for model_id in settings.ALL_MODELS:
@@ -1192,7 +1183,7 @@ async def list_providers():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Service health check - Returns service status"""
     return {"status": "healthy", "service": "Lease Violation Analyzer"}
 
 
@@ -1202,7 +1193,16 @@ async def generate_lease(
     lease_request: LeaseGenerationRequestWrapper = Body(...)
 ):
     """
-    Generate a comprehensive lease agreement with legal research and return as HTML
+    Generate custom lease agreement with legal research (Premium)
+    
+    Create comprehensive lease document with jurisdiction-specific legal research.
+    Uses Claude Sonnet 4.5 to generate complete, legally-informed lease as HTML.
+    
+    **Cost:** Varies - Uses Claude Sonnet 4.5 (premium model)
+    **Output:** HTML lease document with proper formatting and legal clauses
+    
+    **Example:** Provide property details + jurisdiction → AI researches local laws → 
+    Generates complete lease with state-specific clauses
     
     This endpoint:
     1. Validates the lease request data
@@ -1304,19 +1304,24 @@ async def generate_lease(
 @app.post("/rewrite-email", response_model=EmailRewriteResponse)
 async def rewrite_as_email(request: EmailRewriteRequest):
     """
-    Rewrite provided text in professional email format using AI.
+    Rewrite text as professional email (FREE)
     
-    Args:
-        request: EmailRewriteRequest containing text to rewrite
-        
-    Returns:
-        EmailRewriteResponse with rewritten email content and subject line
+    Transform any text into properly formatted business email with subject line.
+    AI creates greeting, body, and closing in professional tone.
+    
+    **Cost:** FREE ($0.00) - Uses Claude Haiku
+    
+    **Request Body:**
+    ```json
+    {"text": "Need to talk about the lease violation"}
+    ```
+    
+    **Example Output:**
+    - subject: "Regarding Lease Agreement Discussion"
+    - email_content: Professional email with proper greeting and structure
     """
     try:
         logger.info(f"Rewriting text as email (length: {len(request.text)})")
-        
-        # Initialize Bedrock client
-        bedrock_client = BedrockClient()
         
         # Create prompt for email rewriting
         system_prompt = """You are a professional email writing assistant. Your task is to rewrite provided text into a well-formatted, professional email.

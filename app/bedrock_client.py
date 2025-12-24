@@ -2408,16 +2408,21 @@ Set suggestTicket to true when:
             
             messages = [{"role": msg.role, "content": msg.content} for msg in conversation_history]
             
-            # Format for Bedrock
+            # Format for Bedrock - Use Haiku for fast responses
             user_prompt = "\n\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in messages])
             
-            body = self._format_messages_for_bedrock(
-                model_id=settings.FREE_MODEL,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt
-            )
+            # Use Haiku (fastest model)
+            haiku_model = "us.anthropic.claude-3-haiku-20240307-v1:0"
             
-            response_text, _ = self._call_bedrock_with_retry(settings.FREE_MODEL, body)
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 400,  # Keep responses brief
+                "temperature": 0.3,  # Slightly deterministic
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_prompt}]
+            }
+            
+            response_text, _ = self._call_bedrock_with_retry(haiku_model, body)
             elapsed_time = time.time() - start_time
             
             logger.info(f"Maintenance chat response received in {elapsed_time:.2f}s")
@@ -2496,3 +2501,78 @@ Set suggestTicket to true when:
         except Exception as e:
             logger.error(f"Error generating text: {str(e)}")
             raise AIModelError(message="Failed to generate text", details=str(e))
+    
+    def extract_maintenance_request_from_chat(
+        self,
+        conversation_history: List['ChatMessage']
+    ) -> 'MaintenanceRequestExtraction':
+        """
+        Extract title and description from tenant chat for maintenance request.
+        Uses Haiku for fast, cost-effective extraction.
+        
+        Args:
+            conversation_history: Complete chat conversation
+            
+        Returns:
+            MaintenanceRequestExtraction with title and description
+        """
+        from app.models import MaintenanceRequestExtraction
+        
+        try:
+            start_time = time.time()
+            logger.info("Extracting maintenance request from chat conversation")
+            
+            # Use Haiku (fast and cheap)
+            model = "us.anthropic.claude-3-haiku-20240307-v1:0"
+            
+            # Build conversation context
+            messages = [{"role": msg.role, "content": msg.content} for msg in conversation_history]
+            conversation_text = "\n\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in messages])
+            
+            system_prompt = """Extract a maintenance request from the tenant's conversation.
+
+OUTPUT REQUIREMENTS:
+1. Title: Brief summary from tenant's perspective (max 80 characters)
+2. Description: Detailed description including all relevant details from conversation
+
+RESPONSE FORMAT (JSON only):
+{
+  "title": "brief issue summary",
+  "description": "complete description with all details"
+}
+
+Be concise but include all important details."""
+
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 300,  # Low token limit - extraction is brief
+                "temperature": 0.0,  # Deterministic
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": f"Extract maintenance request from this conversation:\n\n{conversation_text}"}]
+            }
+            
+            response_text, _ = self._call_bedrock_with_retry(model, body)
+            elapsed_time = time.time() - start_time
+            
+            logger.info(f"Extraction completed in {elapsed_time:.2f}s")
+            
+            # Parse JSON response
+            json_str = self._extract_json_from_markdown(response_text)
+            if not json_str:
+                json_str = response_text
+            
+            json_str = self._sanitize_json_string(json_str)
+            parsed = json.loads(json_str)
+            
+            # Truncate title to 80 chars if needed
+            title = parsed.get("title", "Maintenance request")[:80]
+            description = parsed.get("description", "Issue reported through chat")
+            
+            return MaintenanceRequestExtraction(
+                title=title,
+                description=description
+            )
+            
+        except Exception as e:
+            logger.error(f"Error extracting maintenance request: {str(e)}")
+            raise AIModelError(message="Failed to extract maintenance request", details=str(e))

@@ -331,6 +331,20 @@ class MaintenanceChatResponse(BaseModel):
         }
 
 
+class MaintenanceRequestExtraction(BaseModel):
+    """Extracted maintenance request from tenant chat conversation"""
+    title: str = Field(..., description="Brief title for the maintenance request (max 80 chars, from tenant's perspective)", max_length=80)
+    description: str = Field(..., description="Detailed description of the issue from tenant's conversation")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "title": "Broken shower head leaking water",
+                "description": "The shower head in the main bathroom is broken and leaking water constantly. It's been dripping for 2 days and getting worse. The water pressure is also very low when trying to use it."
+            }
+        }
+
+
 # ============================================================================
 # LEASE GENERATOR MODELS
 # ============================================================================
