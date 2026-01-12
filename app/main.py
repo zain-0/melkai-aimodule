@@ -30,6 +30,9 @@ from app.analyzer import LeaseAnalyzer
 from app.bedrock_client import BedrockClient
 from app.lease_generator import LegalResearchService, LeaseGenerationService
 from app.config import settings
+from app.lease_schemas import LeaseExtractionResponse
+from app.lease_extractor import LeaseExtractor
+from app.lease_utils import validate_pdf_file, generate_request_id, estimate_cost
 
 # Enums for dropdown selections in Swagger UI
 class ProviderEnum(str, Enum):
@@ -173,6 +176,8 @@ async def root():
             "maintenance_chat": "/tenant/chat",
             "tenant_rewrite": "/tenant/rewrite",
             "lease_generate": "/lease/generate",
+            "extract_lease": "/extract-lease",
+            "lease_extraction_health": "/lease-extraction/health",
             "docs": "/docs"
         }
     }
@@ -1379,6 +1384,117 @@ Do NOT add any explanations, notes, or commentary outside the email format."""
             status_code=500,
             detail=f"Failed to rewrite email: {str(e)}"
         )
+
+
+@app.post("/extract-lease", response_model=LeaseExtractionResponse)
+async def extract_lease_data(
+    file: UploadFile = File(..., description="PDF lease file to extract structured data from")
+):
+    """
+    Extract structured data from a commercial lease PDF
+    
+    This endpoint uses advanced sliding window processing with AWS Bedrock Claude 3 Haiku
+    to extract comprehensive lease information including:
+    - Utility responsibilities
+    - Common area maintenance charges
+    - Additional fees
+    - Tenant improvements
+    - Term details (dates, renewal options)
+    - Rent and deposits
+    - Rent increase schedules
+    - Abatements and discounts
+    - Special clauses
+    - NSF fees
+    
+    Processing time: 20-30 seconds for typical 40-page lease
+    Cost: ~$0.30-0.40 per lease
+    
+    Args:
+        file: PDF file upload (max 100MB)
+        
+    Returns:
+        LeaseExtractionResponse with structured data, metadata, and summary
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+    
+    pdf_bytes = await file.read()
+    file_size = len(pdf_bytes)
+    request_id = generate_request_id(file.filename)
+    
+    # Validate file
+    is_valid, error_msg = validate_pdf_file(file.filename, file_size)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+    
+    logger.info(f"Starting lease extraction for {file.filename} (request_id={request_id})")
+    
+    try:
+        # Create extractor instance
+        extractor = LeaseExtractor(
+            region=settings.AWS_REGION,
+            access_key=settings.AWS_ACCESS_KEY_ID,
+            secret_key=settings.AWS_SECRET_ACCESS_KEY,
+            model_id=settings.LEASE_EXTRACTION_MODEL,
+            temperature=settings.LEASE_EXTRACTION_TEMPERATURE,
+            max_tokens=settings.LEASE_EXTRACTION_MAX_TOKENS,
+            max_concurrent=settings.LEASE_EXTRACTION_MAX_CONCURRENT,
+            timeout=settings.LEASE_EXTRACTION_TIMEOUT,
+            window_size=settings.LEASE_EXTRACTION_WINDOW_SIZE,
+            window_overlap=settings.LEASE_EXTRACTION_WINDOW_OVERLAP
+        )
+        
+        # Extract lease data
+        result = await extractor.extract_lease(pdf_bytes=pdf_bytes, filename=file.filename)
+        
+        # Calculate cost estimate
+        token_usage = result.metadata.token_usage
+        estimated_cost = estimate_cost(
+            token_usage.get('input_tokens', 0), 
+            token_usage.get('output_tokens', 0), 
+            "haiku"
+        )
+        
+        logger.info(
+            f"Extraction successful: {request_id}",
+            extra={
+                "processing_time": result.metadata.processing_time,
+                "total_tokens": token_usage.get('total_tokens', 0),
+                "estimated_cost": estimated_cost,
+                "conflicts_found": result.metadata.conflicts_found
+            }
+        )
+        
+        # Cleanup
+        await extractor.close()
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Extraction failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)}")
+
+
+@app.get("/lease-extraction/health")
+async def lease_extraction_health():
+    """
+    Health check for lease extraction API
+    
+    Returns current configuration and status of the lease extraction system.
+    """
+    return {
+        "status": "healthy",
+        "service": "Lease Data Extraction API",
+        "version": "1.0.0",
+        "config": {
+            "model": settings.LEASE_EXTRACTION_MODEL,
+            "max_concurrent_bedrock": settings.LEASE_EXTRACTION_MAX_CONCURRENT,
+            "window_size": settings.LEASE_EXTRACTION_WINDOW_SIZE,
+            "window_overlap": settings.LEASE_EXTRACTION_WINDOW_OVERLAP,
+            "max_pages": settings.LEASE_EXTRACTION_MAX_PAGES,
+            "timeout": settings.LEASE_EXTRACTION_TIMEOUT
+        }
+    }
 
 
 if __name__ == "__main__":

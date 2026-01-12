@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_MB: int = 10
     SEARCH_RESULTS_LIMIT: int = 10
     
+    # Lease Extraction API Settings
+    LEASE_EXTRACTION_MODEL: str = "us.anthropic.claude-3-5-haiku-20241022-v1:0"  # Claude 3.5 Haiku with inference profile
+    LEASE_EXTRACTION_TEMPERATURE: float = 0.0
+    LEASE_EXTRACTION_MAX_TOKENS: int = 16000
+    LEASE_EXTRACTION_MAX_CONCURRENT: int = 5
+    LEASE_EXTRACTION_TIMEOUT: int = 120
+    LEASE_EXTRACTION_WINDOW_SIZE: int = 7
+    LEASE_EXTRACTION_WINDOW_OVERLAP: int = 2
+    LEASE_EXTRACTION_MAX_PAGES: int = 100
+    
     class Config:
         env_file = ".env"
         case_sensitive = True

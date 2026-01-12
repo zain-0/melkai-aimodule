@@ -2393,12 +2393,27 @@ For anything beyond basic checks and cleaning, your job is to:
 - Do not promise specific repair times or outcomes. Say "maintenance team" or "property management will review your request."
 - If you are unsure whether a suggestion is safe: Do not provide the suggestion. Instead, recommend contacting maintenance and/or emergency services.
 
-# Response Format
-Respond in JSON format:
+# Response Format - CRITICAL
+You MUST respond with this EXACT JSON structure. Do NOT put JSON inside a string.
+
+CORRECT FORMAT:
 {
-  "response": "your helpful response here",
+  "response": "Check if the valve is fully open",
   "suggestTicket": false
 }
+
+WRONG FORMAT (DO NOT DO THIS):
+{
+  "response": "{\"response\": \"Check if the valve is fully open\", \"suggestTicket\": false}",
+  "suggestTicket": false
+}
+
+RULES:
+- Return JSON directly, NOT as a string
+- The "response" field is a plain text string with your message
+- The "suggestTicket" field is a boolean (true or false)
+- Do NOT use escape sequences like \n or \" in the response field value
+- Do NOT nest JSON objects
 
 Set suggestTicket to true when:
 - Any emergency or hazardous situation is detected
@@ -2408,40 +2423,92 @@ Set suggestTicket to true when:
             
             messages = [{"role": msg.role, "content": msg.content} for msg in conversation_history]
             
-            # Format for Bedrock - Use Haiku for fast responses
+            # Format for Llama - Use Llama 3.1 70B (fast, reliable)
             user_prompt = "\n\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in messages])
             
-            # Use Haiku (fastest model)
-            haiku_model = "us.anthropic.claude-3-haiku-20240307-v1:0"
+            # Use Llama 3.1 70B Instruct
+            llama_model = "us.meta.llama3-1-70b-instruct-v1:0"
+            
+            # Create system prompt - simpler and clearer
+            simple_system = """You are a maintenance assistant. Help tenants troubleshoot issues.
+
+RESPONSE FORMAT (IMPORTANT):
+Return JSON: {"response": "your message", "suggestTicket": false}
+
+RULES:
+- "response" is plain text (your message)
+- "suggestTicket" is true when professional help needed
+- Keep responses short (2-3 sentences)
+- Ask questions to understand the issue
+- Suggest only safe solutions
+- Set suggestTicket=true after 3-4 exchanges without resolution"""
             
             body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 400,  # Keep responses brief
-                "temperature": 0.3,  # Slightly deterministic
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": user_prompt}]
+                "prompt": f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{simple_system}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+                "max_gen_len": 512,
+                "temperature": 0.3,
+                "top_p": 0.9
             }
             
-            response_text, _ = self._call_bedrock_with_retry(haiku_model, body)
+            response_text, _ = self._call_bedrock_with_retry(llama_model, body)
             elapsed_time = time.time() - start_time
             
             logger.info(f"Maintenance chat response received in {elapsed_time:.2f}s")
+            logger.debug(f"Raw AI response (first 300 chars): {response_text[:300]}")
             
             try:
+                # Extract JSON from markdown if present
                 json_str = self._extract_json_from_markdown(response_text)
                 if not json_str:
-                    json_str = response_text
+                    json_str = response_text.strip()
                 
-                json_str = self._sanitize_json_string(json_str)
-                parsed = json.loads(json_str)
+                # First attempt: parse directly
+                try:
+                    parsed = json.loads(json_str)
+                    logger.debug("✓ Direct JSON parse successful")
+                except json.JSONDecodeError as e1:
+                    # Second attempt: sanitize and retry
+                    logger.debug(f"Direct parse failed ({e1}), trying sanitized version...")
+                    json_str_sanitized = self._sanitize_json_string(json_str)
+                    try:
+                        parsed = json.loads(json_str_sanitized)
+                        logger.debug("✓ Sanitized JSON parse successful")
+                    except json.JSONDecodeError as e2:
+                        # Third attempt: Try to fix common issues manually
+                        logger.debug(f"Sanitized parse also failed ({e2}), manual fix attempt...")
+                        # Replace actual newlines and tabs in string values with escape sequences
+                        json_str_fixed = json_str.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+                        parsed = json.loads(json_str_fixed)
+                        logger.debug("✓ Manual fix successful")
+                
+                # Get values from parsed JSON
+                response_value = parsed.get("response", "")
+                suggest_ticket = parsed.get("suggestTicket", False)
+                
+                # Fix double-encoding: check if response is a JSON string instead of plain text
+                if isinstance(response_value, str) and response_value.strip().startswith("{"):
+                    logger.warning("⚠️ Detected double-encoded JSON in response field")
+                    try:
+                        # Parse inner JSON
+                        inner = json.loads(response_value)
+                        if isinstance(inner, dict) and "response" in inner:
+                            # Extract the actual values from inner JSON
+                            response_value = inner.get("response", response_value)
+                            suggest_ticket = inner.get("suggestTicket", suggest_ticket)
+                            logger.info("✅ Successfully fixed double-encoded JSON")
+                    except json.JSONDecodeError:
+                        # If can't parse, treat the whole thing as plain text (keep as-is)
+                        logger.debug("Could not parse inner JSON, keeping original value")
                 
                 return MaintenanceChatResponse(
-                    response=parsed.get("response", response_text),
-                    suggestTicket=parsed.get("suggestTicket", False)
+                    response=response_value,
+                    suggestTicket=suggest_ticket
                 )
                 
             except json.JSONDecodeError as e:
-                logger.warning(f"JSON parse failed, using raw response: {e}")
+                logger.error(f"❌ All JSON parse attempts failed: {e}")
+                logger.debug(f"Failed to parse: {response_text[:500]}")
+                # Fallback: use raw response
                 suggest_ticket = any(phrase in response_text.lower() for phrase in [
                     "create a maintenance ticket", "create a ticket", "professional attention",
                     "needs a professional", "call maintenance"

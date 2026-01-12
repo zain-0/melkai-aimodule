@@ -1,0 +1,125 @@
+"""
+PDF processing utilities using PyMuPDF with sliding window support
+"""
+import asyncio
+import logging
+from typing import List, Dict, Optional
+import fitz  # PyMuPDF
+
+logger = logging.getLogger(__name__)
+
+
+class PDFWindow:
+    """Represents a window of PDF pages"""
+    
+    def __init__(self, window_id: int, start_page: int, end_page: int, page_texts: List[str], total_pages: int):
+        self.window_id = window_id
+        self.start_page = start_page
+        self.end_page = end_page
+        self.page_texts = page_texts
+        self.total_pages = total_pages
+        self.text = "\n\n--- PAGE BREAK ---\n\n".join(
+            f"=== PAGE {start_page + i + 1} ===\n{text}" for i, text in enumerate(page_texts)
+        )
+    
+    def __repr__(self):
+        return f"PDFWindow(id={self.window_id}, pages={self.start_page+1}-{self.end_page+1}/{self.total_pages})"
+
+
+class LeasePDFProcessor:
+    """PDF processing with streaming and sliding windows for lease extraction"""
+    
+    def __init__(self, window_size: int = 7, window_overlap: int = 2):
+        self.window_size = window_size
+        self.window_overlap = window_overlap
+    
+    async def extract_pages_from_bytes(self, pdf_bytes: bytes, filename: str = "upload.pdf") -> List[str]:
+        """Extract all pages from PDF bytes asynchronously"""
+        logger.info(f"Extracting PDF from uploaded file: {filename}")
+        try:
+            loop = asyncio.get_event_loop()
+            pages = await loop.run_in_executor(None, self._extract_text_from_bytes, pdf_bytes)
+            logger.info(f"Extracted {len(pages)} pages from PDF")
+            return pages
+        except Exception as e:
+            logger.error(f"Failed to extract PDF: {e}")
+            raise
+    
+    def _extract_text_from_bytes(self, pdf_bytes: bytes) -> List[str]:
+        """Synchronous PDF text extraction using PyMuPDF"""
+        pages = []
+        try:
+            pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+            page_count = pdf_document.page_count
+            
+            total_text_length = 0
+            for page_num in range(page_count):
+                page = pdf_document[page_num]
+                text = page.get_text("text").strip()
+                total_text_length += len(text)
+                if not text:
+                    text = f"[Empty page {page_num + 1}]"
+                pages.append(text)
+            
+            pdf_document.close()
+            
+            # Check if OCR needed
+            avg_chars_per_page = total_text_length / page_count if page_count > 0 else 0
+            if avg_chars_per_page < 100:
+                logger.warning(
+                    f"Very little text extracted ({avg_chars_per_page:.0f} chars/page). "
+                    f"This appears to be a scanned/image-based PDF. OCR may be needed."
+                )
+            
+            return pages
+        except Exception as e:
+            logger.error(f"PDF text extraction failed: {e}")
+            raise
+    
+    def create_sliding_windows(self, pages: List[str]) -> List[PDFWindow]:
+        """Create overlapping windows from pages"""
+        total_pages = len(pages)
+        
+        windows = []
+        window_id = 0
+        start_idx = 0
+        
+        while start_idx < total_pages:
+            end_idx = min(start_idx + self.window_size, total_pages)
+            window_pages = pages[start_idx:end_idx]
+            window = PDFWindow(window_id, start_idx, end_idx - 1, window_pages, total_pages)
+            windows.append(window)
+            
+            stride = self.window_size - self.window_overlap
+            start_idx += stride
+            window_id += 1
+            
+            if end_idx >= total_pages:
+                break
+        
+        logger.info(f"Created {len(windows)} windows (size={self.window_size}, overlap={self.window_overlap}, total_pages={total_pages})")
+        return windows
+    
+    async def extract_and_window(self, pdf_bytes: bytes, filename: str = "upload.pdf"):
+        """Complete extraction and windowing pipeline"""
+        pages = await self.extract_pages_from_bytes(pdf_bytes, filename)
+        windows = self.create_sliding_windows(pages)
+        metadata = {
+            'total_pages': len(pages),
+            'total_windows': len(windows),
+            'window_size': self.window_size,
+            'overlap': self.window_overlap,
+            'avg_chars_per_page': sum(len(p) for p in pages) / len(pages) if pages else 0
+        }
+        return windows, metadata
+    
+    def get_window_context(self, window: PDFWindow) -> Dict:
+        """Get context metadata for a window"""
+        return {
+            'window_id': window.window_id,
+            'start_page': window.start_page + 1,  # 1-based for display
+            'end_page': window.end_page + 1,      # 1-based for display
+            'total_pages': window.total_pages,
+            'is_first_window': window.window_id == 0,
+            'is_last_window': window.end_page == window.total_pages - 1
+        }
