@@ -147,20 +147,41 @@ You are extracting structured data from a commercial lease agreement. This is pa
 
 **Your Task:**
 1. Read the provided lease pages carefully and extract ALL relevant data
-2. **CRITICAL: Extract ALL numerical amounts - don't leave fields null when amounts are visible**
+2. **CRITICAL - COMPLETENESS IS PRIORITY:**
+   - Extract ALL items mentioned, even if amounts are unclear or TBD
+   - Create entries for utilities/CAM/fees even if only mentioned without dollar amounts
+   - Use null values when amounts not specified, but ALWAYS create the entry
+   - Better to have 10 items with some null values than 5 items with all values filled
+   - Extract ALL numerical amounts when visible
 3. Be thorough - scan for:
-   - **Utilities** (electricity, water, gas, internet, trash, etc.) - Extract specific dollar amounts or state "Tenant pays directly"
-   - **CAM charges** (cleaning, landscaping, parking, common area costs) - Extract percentage of operating expenses or flat amounts
-   - **Additional fees** (admin fees, processing fees, insurance, taxes) - Extract exact amounts or percentages
-   - **Tenant improvements** (TI allowances, build-out costs) - Extract total amounts and recovery methods
-   - **Dates** (start, end, move-in, renewals) - Use exact dates from lease
+   - **Utilities** (electricity, water, gas, internet, trash, sewer, HVAC, etc.) - **ALWAYS create an entry for each utility mentioned**
+     * Extract specific dollar amounts when stated
+     * If tenant responsibility without amount: set amount_value=null and note in utility_name (e.g., "Electricity - Tenant Direct Pay")
+     * If landlord pays: responsible="Owner", amount_value=null
+     * Look in: utility sections, operating expense sections, tenant obligations, exhibits
+   - **CAM charges** (cleaning, landscaping, parking, snow removal, common area costs, property management) - **ALWAYS create entries for each CAM item**
+     * Extract percentage of operating expenses OR flat amounts
+     * If "proportionate share" or "pro-rata" without percentage: set percentage=null, base_amount=null, note in area_name
+     * If mentioned but amount TBD: still create entry with null values
+     * Look in: CAM sections, operating expenses, NNN sections, exhibits
+   - **Additional fees** (admin fees, processing fees, insurance, taxes, parking fees, pet fees, amenity fees) - Extract ALL fees mentioned
+   - **Tenant improvements** (TI allowances, build-out costs, improvement allowances) - Extract total amounts and recovery methods
+   - **RENEWAL OPTIONS** - **CRITICAL - Extract all renewal details:**
+     * Number of renewal options (e.g., "two 5-year options", "one option")
+     * Duration of each renewal period (years/months)
+     * Notice period required (days/months before expiration)
+     * Renewal rent calculation method (e.g., "95% of fair market value", "5% increase", "to be negotiated")
+     * Any conditions for renewal (e.g., "no defaults", "good standing")
+     * Set renewal_options="yes" if ANY renewal rights exist
+     * Put detailed terms in renewal_rent_increase field
+   - **Dates** (start, end, move-in, renewal notice deadlines) - Use exact dates from lease
    - **Rent amounts** - Extract base monthly rent, NOT per square foot rates unless that's the only value given
    - **Security deposits** - Extract exact amounts
    - **Rent increase schedules** - Extract all annual increases with dates and amounts/percentages
    - **Late fees** - Extract percentage OR flat amount (NOT both) into rent_and_deposits.late_fee
    - **NSF/bounced check fees** - Extract exact amount into nsf_fees.amount
    - **Abatements** (free rent periods, discounts) - Extract dates and amounts
-   - **Special clauses** (use restrictions, holdover, options, etc.)
+   - **Special clauses** (use restrictions, holdover, options, termination rights, exclusivity, signage, parking rights)
 
 4. **For charges - BE SPECIFIC:**
    - If stated as "$X per month" or just "$X" → type="Amount", amount_value=X, percentage=null
@@ -172,8 +193,15 @@ You are extracting structured data from a commercial lease agreement. This is pa
      - "Late fee: 10% of unpaid rent" → type="Percentage", percentage=10, amount_value=null
      - "Greater of $100 or 10%" → Choose ONE: type="Amount", amount_value=100 (the $100 is typically the primary charge)
      - **DO NOT** set both amount_value AND percentage in the same charge object
-   - **CRITICAL: If you set type="Percentage", you MUST provide the percentage number. If you can't find a percentage value, DO NOT create the entry at all**
-   - **CRITICAL: If you set type="Amount", you MUST provide amount_value. If amount is not specified (e.g., "Tenant pays directly"), use amount_value=null**
+   - **For Utilities/CAM with unclear amounts:**
+     - **ALWAYS create entries** even if amount is not specified
+     - If "Tenant pays directly" or "TBD" or "proportionate share": create entry with amount_value=null or percentage=null
+     - Include descriptive information in the name field (e.g., "Electricity - Direct Payment to Provider")
+     - Better to have complete list with null values than to skip items
+   - **For Percentage charges:**
+     - If percentage stated: type="Percentage", percentage=X, base_amount if given
+     - If only "proportionate share" stated: type="Percentage", percentage=null, base_amount=null
+     - If "X% of operating expenses": type="Percentage", percentage=X, note base in base_amount or area_name
 
 5. **For rent calculations - CRITICAL - READ THIS CAREFULLY:**
    - **monthly_base_rent = MONTHLY RENT IN DOLLARS, NOT ANNUAL, NOT PER SQFT RATE**
@@ -203,11 +231,34 @@ You are extracting structured data from a commercial lease agreement. This is pa
 
 9. Return ONLY the JSON object - no other text
 
+**EXTRACTION EXAMPLES:**
+
+Example 1 - Utility with amount:
+"Tenant shall pay $150/month for water and sewer"
+→ {{"utility_name": "Water and Sewer", "responsible": "Tenant", "frequency": "Monthly", "charges": {{"type": "Amount", "amount_value": 150, "percentage": null, "base_amount": null}}}}
+
+Example 2 - Utility without amount:
+"Tenant shall contract directly with utility providers for electricity"
+→ {{"utility_name": "Electricity - Direct Payment to Provider", "responsible": "Tenant", "frequency": "Monthly", "charges": {{"type": "Amount", "amount_value": null, "percentage": null, "base_amount": null}}}}
+
+Example 3 - CAM with percentage:
+"Tenant's proportionate share of common area maintenance is 8.5% of total operating expenses"
+→ {{"area_name": "Common Area Maintenance", "responsible": "Tenant", "frequency": "Monthly", "charges": {{"type": "Percentage", "amount_value": null, "percentage": 8.5, "base_amount": null}}}}
+
+Example 4 - CAM without specific amount:
+"Tenant shall pay pro-rata share of landscaping and snow removal costs"
+→ {{"area_name": "Landscaping and Snow Removal - Pro-Rata Share", "responsible": "Tenant", "frequency": "As Needed", "charges": {{"type": "Percentage", "amount_value": null, "percentage": null, "base_amount": null}}}}
+
+Example 5 - Renewal options:
+"Tenant shall have two (2) options to renew for successive five (5) year terms. Renewal rent shall be 95% of fair market value. Notice required 180 days prior to expiration."
+→ "renewal_options": "yes", "renewal_rent_increase": "Two 5-year options at 95% FMV, 180 days notice required"
+
 **REMEMBER:**
 - This is {window_context} data extraction
 - Extract everything visible in these pages
 - Overlapping windows will be merged later
-- Precision and completeness matter more than avoiding duplication
+- Completeness matters more than avoiding null values
+- Create entries for ALL utilities/CAM/fees mentioned, even if amounts are TBD
 """
 
 

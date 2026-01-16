@@ -1,5 +1,5 @@
 """
-PDF processing utilities using PyMuPDF with sliding window support
+PDF processing utilities using PyMuPDF with sliding window support and OCR fallback
 """
 import asyncio
 import logging
@@ -7,6 +7,16 @@ from typing import List, Dict, Optional
 import fitz  # PyMuPDF
 
 logger = logging.getLogger(__name__)
+
+# Try to import OCR processor
+try:
+    from app.ocr_processor import get_ocr_processor, is_ocr_available, get_ocr_method_name
+    OCR_AVAILABLE = is_ocr_available()
+    if OCR_AVAILABLE:
+        logger.info(f"OCR available: {get_ocr_method_name()}")
+except ImportError as e:
+    OCR_AVAILABLE = False
+    logger.warning(f"OCR not available: {e}")
 
 
 class PDFWindow:
@@ -29,7 +39,7 @@ class PDFWindow:
 class LeasePDFProcessor:
     """PDF processing with streaming and sliding windows for lease extraction"""
     
-    def __init__(self, window_size: int = 7, window_overlap: int = 2):
+    def __init__(self, window_size: int = 5, window_overlap: int = 1):
         self.window_size = window_size
         self.window_overlap = window_overlap
     
@@ -39,7 +49,31 @@ class LeasePDFProcessor:
         try:
             loop = asyncio.get_event_loop()
             pages = await loop.run_in_executor(None, self._extract_text_from_bytes, pdf_bytes)
-            logger.info(f"Extracted {len(pages)} pages from PDF")
+            
+            # Check if OCR is needed (pages will be None if OCR required)
+            if pages is None and OCR_AVAILABLE:
+                logger.info(f"Running OCR extraction with {get_ocr_method_name()}...")
+                # Get page count first
+                pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+                page_count = pdf_document.page_count
+                pdf_document.close()
+                
+                # Get appropriate OCR processor (Textract preferred, Tesseract fallback)
+                ocr_processor = get_ocr_processor(prefer_textract=True)
+                
+                # Run OCR with file size-based splitting
+                pages = await ocr_processor.extract_text_from_pdf(pdf_bytes, page_count)
+                logger.info(f"OCR extracted {len(pages)} pages from PDF using {get_ocr_method_name()}")
+            elif pages is None:
+                # OCR needed but not available
+                logger.error("OCR required but not available")
+                raise ValueError(
+                    "PDF appears to be scanned but OCR is not configured. "
+                    "Install AWS SDK + credentials or Tesseract: pip install pytesseract pdf2image"
+                )
+            else:
+                logger.info(f"Extracted {len(pages)} pages from PDF (native text)")
+            
             return pages
         except Exception as e:
             logger.error(f"Failed to extract PDF: {e}")
@@ -65,11 +99,22 @@ class LeasePDFProcessor:
             
             # Check if OCR needed
             avg_chars_per_page = total_text_length / page_count if page_count > 0 else 0
-            if avg_chars_per_page < 100:
+            from app.config import settings
+            ocr_threshold = getattr(settings, 'OCR_CHARS_PER_PAGE_THRESHOLD', 100)
+            
+            if avg_chars_per_page < ocr_threshold:
                 logger.warning(
-                    f"Very little text extracted ({avg_chars_per_page:.0f} chars/page). "
-                    f"This appears to be a scanned/image-based PDF. OCR may be needed."
+                    f"Very little text extracted ({avg_chars_per_page:.0f} chars/page, threshold: {ocr_threshold}). "
+                    f"This appears to be a scanned/image-based PDF."
                 )
+                
+                if OCR_AVAILABLE:
+                    logger.info(f"Attempting OCR extraction with {get_ocr_method_name()}...")
+                    # Need to run OCR in async context, so return marker for async processing
+                    # We'll handle this in the async wrapper
+                    return None  # Signal that OCR is needed
+                else:
+                    logger.warning("OCR not available. Install AWS SDK + credentials or Tesseract (pip install pytesseract pdf2image).")
             
             return pages
         except Exception as e:

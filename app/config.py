@@ -63,14 +63,22 @@ class Settings(BaseSettings):
     SEARCH_RESULTS_LIMIT: int = 10
     
     # Lease Extraction API Settings
-    LEASE_EXTRACTION_MODEL: str = "us.anthropic.claude-3-5-haiku-20241022-v1:0"  # Claude 3.5 Haiku with inference profile
+    LEASE_EXTRACTION_MODEL: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"  # Claude Sonnet 4.5 - Best accuracy for complex extraction
     LEASE_EXTRACTION_TEMPERATURE: float = 0.0
     LEASE_EXTRACTION_MAX_TOKENS: int = 16000
-    LEASE_EXTRACTION_MAX_CONCURRENT: int = 5
-    LEASE_EXTRACTION_TIMEOUT: int = 120
-    LEASE_EXTRACTION_WINDOW_SIZE: int = 7
-    LEASE_EXTRACTION_WINDOW_OVERLAP: int = 2
+    LEASE_EXTRACTION_MAX_CONCURRENT: int = 12  # Increased from 5 - process all windows in parallel
+    LEASE_EXTRACTION_TIMEOUT: int = 180  # Increased from 120s for large windows
+    LEASE_EXTRACTION_WINDOW_SIZE: int = 5  # Reduced from 7 for faster LLM processing
+    LEASE_EXTRACTION_WINDOW_OVERLAP: int = 1  # Reduced from 2 to minimize redundancy
     LEASE_EXTRACTION_MAX_PAGES: int = 100
+    
+    # OCR Configuration
+    OCR_METHOD: str = "textract"  # "textract" or "tesseract"
+    OCR_CHARS_PER_PAGE_THRESHOLD: int = 100  # Trigger OCR if less than this
+    OCR_FILE_SIZE_THRESHOLD_MB: int = 5  # Split pages if PDF > 5MB
+    TEXTRACT_MAX_WORKERS: int = 15  # Max concurrent Textract requests (balanced for API limits)
+    TEXTRACT_PAGES_PER_BATCH: int = 3  # Pages per batch (3 = 66% fewer API calls)
+    TEXTRACT_RETRY_ATTEMPTS: int = 3  # Retry attempts for rate limit errors
     
     class Config:
         env_file = ".env"
