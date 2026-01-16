@@ -31,7 +31,15 @@ class LeaseBedrockClient:
             session_kwargs.update({'aws_access_key_id': access_key, 'aws_secret_access_key': secret_key})
         
         self.session = boto3.Session(**session_kwargs)
-        self.client = self.session.client('bedrock-runtime')
+        
+        # Configure boto3 connection pool to match concurrency
+        from botocore.config import Config
+        boto_config = Config(
+            max_pool_connections=max_concurrent,
+            retries={'max_attempts': 3, 'mode': 'adaptive'}
+        )
+        
+        self.client = self.session.client('bedrock-runtime', config=boto_config)
         logger.info(f"Lease Bedrock client initialized (region={self.region}, max_concurrent={self.max_concurrent})")
     
     def _invoke_bedrock_sync(self, model_id: str, prompt: str, temperature: float, max_tokens: int) -> Dict[str, Any]:
