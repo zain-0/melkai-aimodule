@@ -71,7 +71,11 @@ from app.exceptions import (
     PDFTimeoutError,
     AITimeoutError,
     AIModelError,
-    EmptyPDFError
+    EmptyPDFError,
+    FileSizeError,
+    UnsupportedFileTypeError,
+    RateLimitError,
+    ServerError
 )
 from app.validators import (
     validate_maintenance_request,
@@ -154,6 +158,24 @@ def check_rate_limit(client_ip: str) -> bool:
     return True
 
 
+@app.get("/health")
+async def health_check():
+    """
+    Health Check - Verify service is running
+    
+    Returns service health status and configuration info.
+    Used by Docker health checks and monitoring systems.
+    """
+    return {
+        "status": "healthy",
+        "service": "Lease Violation Analyzer API",
+        "version": "1.0.0",
+        "timestamp": datetime.now().isoformat(),
+        "aws_region": settings.AWS_REGION,
+        "using_iam_role": not (settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY)
+    }
+
+
 @app.get("/")
 async def root():
     """
@@ -166,6 +188,7 @@ async def root():
         "version": "1.0.0",
         "description": "Compare AI models for lease violation analysis",
         "endpoints": {
+            "health": "/health",
             "models": "/models",
             "analyze_single": "/analyze/single",
             "analyze_compare": "/analyze/compare",
@@ -196,7 +219,7 @@ async def list_models():
         return models
     except Exception as e:
         logger.error(f"Error listing models: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ServerError(message="Failed to list available models", details=str(e))
 
 
 @app.post("/analyze/single", response_model=AnalysisResult)
@@ -244,15 +267,15 @@ async def analyze_single(
         result = analyzer.analyze_single(pdf_bytes, model_name, search_strategy)
         
         if result.error:
-            raise HTTPException(status_code=500, detail=result.error)
+            raise ServerError(message="Analysis failed", details=result.error)
         
         return result
     
-    except HTTPException:
+    except APIException:
         raise
     except Exception as e:
         logger.error(f"Error in analyze_single endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ServerError(message="Unexpected error during analysis", details=str(e))
 
 
 @app.post("/analyze/compare", response_model=ComparisonResult)
@@ -282,9 +305,9 @@ async def analyze_compare(
     try:
         # Validate file type
         if not file.filename.endswith('.pdf'):
-            raise HTTPException(
-                status_code=400,
-                detail="Only PDF files are supported"
+            raise UnsupportedFileTypeError(
+                file_type=file.filename.split('.')[-1] if '.' in file.filename else 'unknown',
+                supported_types=['pdf']
             )
         
         # Read file
@@ -293,19 +316,16 @@ async def analyze_compare(
         # Check file size
         file_size_mb = len(pdf_bytes) / (1024 * 1024)
         if file_size_mb > settings.MAX_FILE_SIZE_MB:
-            raise HTTPException(
-                status_code=400,
-                detail=f"File size exceeds {settings.MAX_FILE_SIZE_MB}MB limit"
-            )
+            raise FileSizeError(max_size_mb=settings.MAX_FILE_SIZE_MB)
         
         # Analyze with all models
         logger.info(f"Starting comparison analysis for {file.filename}")
         results = await analyzer.analyze_compare(pdf_bytes)
         
         if not results:
-            raise HTTPException(
-                status_code=500,
-                detail="No successful analyses completed"
+            raise ServerError(
+                message="No successful analyses completed",
+                details="All models failed to analyze the lease"
             )
         
         # Extract location from first successful result
@@ -367,11 +387,11 @@ async def analyze_compare(
             comparison_summary=comparison_summary
         )
     
-    except HTTPException:
+    except APIException:
         raise
     except Exception as e:
         logger.error(f"Error in analyze_compare endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ServerError(message="Unexpected error during comparison", details=str(e))
 
 
 @app.post("/analyze/provider/{provider}", response_model=ComparisonResult)
@@ -404,16 +424,16 @@ async def analyze_by_provider(
         }
         
         if provider_value not in provider_map:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid provider. Available: {', '.join(provider_map.keys())}"
+            raise ValidationError(
+                message="Invalid provider specified",
+                details=f"Available providers: {', '.join(provider_map.keys())}"
             )
         
         # Validate file
         if not file.filename.endswith('.pdf'):
-            raise HTTPException(
-                status_code=400,
-                detail="Only PDF files are supported"
+            raise UnsupportedFileTypeError(
+                file_type=file.filename.split('.')[-1] if '.' in file.filename else 'unknown',
+                supported_types=['pdf']
             )
         
         # Read file
@@ -422,19 +442,16 @@ async def analyze_by_provider(
         # Check file size
         file_size_mb = len(pdf_bytes) / (1024 * 1024)
         if file_size_mb > settings.MAX_FILE_SIZE_MB:
-            raise HTTPException(
-                status_code=400,
-                detail=f"File size exceeds {settings.MAX_FILE_SIZE_MB}MB limit"
-            )
+            raise FileSizeError(max_size_mb=settings.MAX_FILE_SIZE_MB)
         
         # Get models for this provider
         prefix = provider_map[provider_value]
         provider_models = [m for m in settings.ALL_MODELS if m.startswith(prefix)]
         
         if not provider_models:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No models found for provider '{provider_value}'"
+            raise ValidationError(
+                message=f"No models available for provider '{provider_value}'",
+                details="This provider may not be configured or have no models enabled"
             )
         
         # Analyze with provider's models using native web search
@@ -500,11 +517,11 @@ async def analyze_by_provider(
             comparison_summary=comparison_summary
         )
     
-    except HTTPException:
+    except APIException:
         raise
     except Exception as e:
         logger.error(f"Error in analyze_by_provider endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ServerError(message="Unexpected error during provider analysis", details=str(e))
 
 
 @app.post("/analyze/categorized", response_model=CategorizedAnalysisResult)
@@ -991,36 +1008,23 @@ async def maintenance_chat(
     # Rate limiting
     client_ip = request.client.host
     if not check_rate_limit(client_ip):
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "error": "Rate limit exceeded",
-                "message": f"Maximum {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds",
-                "suggestion": "Please wait a moment before trying again"
-            }
-        )
+        raise RateLimitError(retry_after_seconds=RATE_LIMIT_WINDOW)
     
     # Validate conversation history format
     for i, msg in enumerate(chat_request.conversationHistory):
         if msg.role not in ["user", "assistant"]:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Invalid conversation history",
-                    "message": f"Message {i} has invalid role '{msg.role}'. Must be 'user' or 'assistant'",
-                    "suggestion": "Check your conversationHistory format"
-                }
+            raise ValidationError(
+                message="Invalid conversation history format",
+                details=f"Message {i} has invalid role '{msg.role}'. Must be 'user' or 'assistant'",
+                suggestion="Check your conversationHistory format"
             )
     
     # Validate last message is from user
     if not chat_request.conversationHistory or chat_request.conversationHistory[-1].role != "user":
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Invalid conversation history",
-                "message": "The last message in conversationHistory must be from the user",
-                "suggestion": "Append the new user message to the conversation history before sending"
-            }
+        raise ValidationError(
+            message="Invalid conversation history format",
+            details="The last message in conversationHistory must be from the user",
+            suggestion="Append the new user message to the conversation history before sending"
         )
     
     # Get the user's message from the last item in history
@@ -1037,15 +1041,13 @@ async def maintenance_chat(
         logger.info(f"Chat response: suggestTicket={result.suggestTicket}")
         return result
         
+    except APIException:
+        raise
     except Exception as e:
         logger.error(f"Error in maintenance chat: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "Chat service error",
-                "message": "Unable to process your message",
-                "suggestion": "Please try again or contact support"
-            }
+        raise ServerError(
+            message="Chat service error",
+            details="Unable to process your message"
         )
 
 
@@ -1079,9 +1081,10 @@ async def extract_maintenance_request(
     try:
         # Validate conversation history
         if not chat_request.conversationHistory or len(chat_request.conversationHistory) == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Conversation history is required"
+            raise ValidationError(
+                message="Conversation history is required",
+                details="Cannot extract maintenance request without conversation",
+                suggestion="Provide at least one message in conversationHistory"
             )
         
         logger.info(f"Extracting maintenance request from {len(chat_request.conversationHistory)} messages")
@@ -1094,17 +1097,13 @@ async def extract_maintenance_request(
         logger.info(f"Extracted request - Title: {result.title}")
         return result
         
-    except HTTPException:
+    except APIException:
         raise
     except Exception as e:
         logger.error(f"Error extracting maintenance request: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "Extraction failed",
-                "message": "Unable to extract maintenance request from conversation",
-                "suggestion": "Ensure conversation history contains maintenance-related discussion"
-            }
+        raise ServerError(
+            message="Extraction failed",
+            details="Unable to extract maintenance request from conversation"
         )
 
 
@@ -1150,15 +1149,15 @@ async def analyze_with_duckduckgo(
         )
         
         if result.error:
-            raise HTTPException(status_code=500, detail=result.error)
+            raise ServerError(message="Analysis failed", details=result.error)
         
         return result
     
-    except HTTPException:
+    except APIException:
         raise
     except Exception as e:
         logger.error(f"Error in analyze_with_duckduckgo endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ServerError(message="Unexpected error during analysis", details=str(e))
 
 
 @app.get("/providers")
@@ -1230,10 +1229,7 @@ async def generate_lease(
         # Check rate limit
         client_ip = request.client.host if request.client else "unknown"
         if not check_rate_limit(client_ip):
-            raise HTTPException(
-                status_code=429,
-                detail="Rate limit exceeded. Please try again later."
-            )
+            raise RateLimitError(retry_after_seconds=RATE_LIMIT_WINDOW)
         
         logger.info(f"Generating lease for property: {lease_request.lease_generation_request.property_details.name}")
         
@@ -1296,13 +1292,13 @@ async def generate_lease(
             }
         )
     
-    except HTTPException:
+    except APIException:
         raise
     except Exception as e:
         logger.error(f"Error generating lease: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate lease: {str(e)}"
+        raise ServerError(
+            message="Failed to generate lease",
+            details=str(e)
         )
 
 
@@ -1416,7 +1412,10 @@ async def extract_lease_data(
         LeaseExtractionResponse with structured data, metadata, and summary
     """
     if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided")
+        raise ValidationError(
+            message="No filename provided",
+            details="File upload requires a valid filename"
+        )
     
     pdf_bytes = await file.read()
     file_size = len(pdf_bytes)
@@ -1425,7 +1424,10 @@ async def extract_lease_data(
     # Validate file
     is_valid, error_msg = validate_pdf_file(file.filename, file_size)
     if not is_valid:
-        raise HTTPException(status_code=400, detail=error_msg)
+        raise ValidationError(
+            message="Invalid file",
+            details=error_msg
+        )
     
     logger.info(f"Starting lease extraction for {file.filename} (request_id={request_id})")
     
@@ -1469,10 +1471,15 @@ async def extract_lease_data(
         await extractor.close()
         
         return result
-        
+    
+    except APIException:
+        raise
     except Exception as e:
         logger.error(f"Extraction failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)}")
+        raise ServerError(
+            message="Extraction failed",
+            details=str(e)
+        )
 
 
 @app.get("/lease-extraction/health")

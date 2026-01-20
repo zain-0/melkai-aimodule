@@ -103,3 +103,51 @@ class EmptyPDFError(APIException):
             suggestion="Please upload a text-based PDF or use OCR to convert scanned documents to text",
             status_code=400
         )
+
+
+class FileSizeError(APIException):
+    """Raised when uploaded file exceeds size limit"""
+    def __init__(self, max_size_mb: int):
+        super().__init__(
+            message=f"File size exceeds {max_size_mb}MB limit",
+            error_code="FILE_TOO_LARGE",
+            details=f"Maximum allowed file size is {max_size_mb}MB",
+            suggestion=f"Please upload a file smaller than {max_size_mb}MB",
+            status_code=413
+        )
+
+
+class UnsupportedFileTypeError(APIException):
+    """Raised when uploaded file type is not supported"""
+    def __init__(self, file_type: str, supported_types: list):
+        super().__init__(
+            message=f"Unsupported file type: {file_type}",
+            error_code="UNSUPPORTED_FILE_TYPE",
+            details=f"Supported file types: {', '.join(supported_types)}",
+            suggestion=f"Please upload one of the following file types: {', '.join(supported_types)}",
+            status_code=415
+        )
+
+
+class RateLimitError(APIException):
+    """Raised when rate limit is exceeded"""
+    def __init__(self, retry_after_seconds: int = 60):
+        super().__init__(
+            message="Rate limit exceeded",
+            error_code="RATE_LIMIT_EXCEEDED",
+            details=f"Too many requests. Please retry after {retry_after_seconds} seconds",
+            suggestion=f"Wait {retry_after_seconds} seconds before making another request",
+            status_code=429
+        )
+
+
+class ServerError(APIException):
+    """Raised for general server errors"""
+    def __init__(self, message: str, details: Optional[str] = None):
+        super().__init__(
+            message=message,
+            error_code="SERVER_ERROR",
+            details=details,
+            suggestion="Please try again later. If the problem persists, contact support",
+            status_code=500
+        )
