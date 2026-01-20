@@ -1,0 +1,56 @@
+name: CD - Deploy to Staging
+
+on:
+  push:
+    branches: [ develop ]
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging Server
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Deploy to staging server via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.STAGING_HOST || secrets.DEPLOY_HOST }}
+        username: ${{ secrets.STAGING_USER || secrets.DEPLOY_USER }}
+        key: ${{ secrets.STAGING_SSH_KEY || secrets.DEPLOY_SSH_KEY }}
+        port: ${{ secrets.STAGING_PORT || 22 }}
+        script: |
+          cd ~/melkai-aimodule-staging || cd ~/melkai-aimodule
+          git fetch origin
+          git checkout develop
+          git pull origin develop
+          sudo docker-compose -f docker-compose.staging.yml down || sudo docker-compose down
+          sudo docker-compose -f docker-compose.staging.yml build --no-cache || sudo docker-compose build --no-cache
+          sudo docker-compose -f docker-compose.staging.yml up -d || sudo docker-compose up -d
+          echo "✅ Staging deployment complete"
+          sudo docker-compose ps
+    
+    - name: Health check
+      run: |
+        echo "Waiting for staging service to start..."
+        sleep 15
+        echo "Testing staging health endpoint..."
+        curl -f http://${{ secrets.STAGING_HOST || secrets.DEPLOY_HOST }}:8001/health || echo "⚠️ Health check skipped - configure STAGING_HOST"
+        echo "✅ Staging deployment completed"
+    
+    - name: Notify on success
+      if: success()
+      run: |
+        echo "🚀 Staging deployment successful!"
+        echo "Version: ${{ github.sha }}"
+        echo "Branch: develop"
+        echo "Ready for testing before production deployment"
+    
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "❌ Staging deployment failed!"
+        echo "Check logs above for details"

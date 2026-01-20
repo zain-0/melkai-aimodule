@@ -600,6 +600,38 @@ for result in results['results']:
     ]
 ```
 
+## CI/CD Pipeline
+
+Automated testing and deployment with GitHub Actions. See detailed guides:
+
+- 📖 **[CI_CD_SETUP_GUIDE.md](CI_CD_SETUP_GUIDE.md)** - Complete setup instructions
+- ⚡ **[CI_CD_QUICK_REFERENCE.md](CI_CD_QUICK_REFERENCE.md)** - Quick commands and troubleshooting
+
+### Workflows
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| **CI** | Push/PR | Automated tests, linting, security scans |
+| **CD** | Push to main | Deploy to production server |
+| **Docker** | Releases | Build and publish Docker images |
+
+### Quick Setup
+```bash
+# 1. Add GitHub secrets (AWS_ACCESS_KEY_ID, DEPLOY_HOST, etc.)
+# 2. Update deployment paths in .github/workflows/cd.yml
+# 3. Push to trigger workflows
+git add .github/
+git commit -m "Add CI/CD pipeline"
+git push origin main
+```
+
+Status badges:
+```markdown
+![CI Tests](https://github.com/zain-0/melkai-aimodule/actions/workflows/ci.yml/badge.svg)
+![Deployment](https://github.com/zain-0/melkai-aimodule/actions/workflows/cd.yml/badge.svg)
+![Docker](https://github.com/zain-0/melkai-aimodule/actions/workflows/docker-publish.yml/badge.svg)
+```
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -616,6 +648,7 @@ For issues or questions:
 
 ## Roadmap
 
+- [x] CI/CD pipeline with GitHub Actions
 - [ ] Add support for more AI providers
 - [ ] Implement caching for search results
 - [ ] Add batch processing endpoint
