@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -14,25 +14,25 @@ class SearchStrategy(str, Enum):
 
 class LeaseInfo(BaseModel):
     """Extracted information from lease document"""
-    address: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
-    county: Optional[str] = None
-    landlord: Optional[str] = None
-    tenant: Optional[str] = None
-    rent_amount: Optional[str] = None
-    security_deposit: Optional[str] = None
-    lease_duration: Optional[str] = None
-    full_text: str
+    address: Optional[str] = Field(None, example="123 Main Street, Apt 4B")
+    city: Optional[str] = Field(None, example="Columbus")
+    state: Optional[str] = Field(None, example="Ohio")
+    county: Optional[str] = Field(None, example="Franklin County")
+    landlord: Optional[str] = Field(None, example="ABC Property Management LLC")
+    tenant: Optional[str] = Field(None, example="John Smith")
+    rent_amount: Optional[str] = Field(None, example="$1,200")
+    security_deposit: Optional[str] = Field(None, example="$1,800")
+    lease_duration: Optional[str] = Field(None, example="12 months")
+    full_text: str = Field(..., example="This lease agreement is entered into...")
 
 
 class Citation(BaseModel):
     """Legal citation for a violation"""
-    source_url: str
-    title: str
-    relevant_text: str
-    law_reference: Optional[str] = None  # e.g., "State Code § 123.45"
-    is_gov_site: bool = False
+    source_url: str = Field(..., example="https://codes.ohio.gov/ohio-revised-code/section-5321.04")
+    title: str = Field(..., example="Ohio Revised Code § 5321.04 - Landlord Obligations")
+    relevant_text: str = Field(..., example="A landlord shall make all repairs necessary to keep the premises in fit and habitable condition.")
+    law_reference: Optional[str] = Field(None, example="ORC § 5321.04")  # e.g., "State Code § 123.45"
+    is_gov_site: bool = Field(False, example=True)
 
 
 class ViolationCategory(str, Enum):
@@ -46,7 +46,7 @@ class ViolationCategory(str, Enum):
 
 class EmailRewriteRequest(BaseModel):
     """Request to rewrite text in email format"""
-    text: str = Field(..., description="Text to be rewritten as an email")
+    text: str = Field(..., description="Text to be rewritten as an email", example="hey need the rent payment for this month asap")
 
 
 class EmailRewriteResponse(BaseModel):
@@ -59,15 +59,15 @@ class EmailRewriteResponse(BaseModel):
 
 class MaintenanceResponse(BaseModel):
     """Landlord's response to maintenance request evaluated against lease"""
-    maintenance_request: str  # Original request from tenant
-    decision: str = Field(..., description="'approved' or 'rejected'")
-    response_message: str  # Professional response message from landlord
-    decision_reasons: List[str]  # Reasons for approval or rejection based on lease
-    lease_clauses_cited: List[str]  # Exact lease clauses supporting decision
-    landlord_responsibility_clause: Optional[str] = None  # Clause if landlord must fix
-    tenant_responsibility_clause: Optional[str] = None  # Clause if tenant responsible
-    estimated_timeline: Optional[str] = None  # If approved, timeline from lease
-    alternative_action: Optional[str] = None  # What tenant should do instead (if rejected)
+    maintenance_request: str = Field(..., example="The heating system is not working. It's been 2 days without heat.")  # Original request from tenant
+    decision: str = Field(..., description="'approved' or 'rejected'", example="approved")
+    response_message: str = Field(..., example="We have received your heating system repair request and approved it as an emergency maintenance issue. A technician will be dispatched within 24 hours.")  # Professional response message from landlord
+    decision_reasons: List[str] = Field(..., example=["Heating is essential for habitability", "Landlord responsible for HVAC system repairs per lease Section 8.2"])  # Reasons for approval or rejection based on lease
+    lease_clauses_cited: List[str] = Field(..., example=["Section 8.2: Landlord shall maintain all heating systems in working order"])  # Exact lease clauses supporting decision
+    landlord_responsibility_clause: Optional[str] = Field(None, example="Section 8.2: Landlord shall maintain all heating, plumbing, and electrical systems")  # Clause if landlord must fix
+    tenant_responsibility_clause: Optional[str] = Field(None, example="Section 9.1: Tenant responsible for light bulbs and batteries")  # Clause if tenant responsible
+    estimated_timeline: Optional[str] = Field(None, example="24-48 hours for emergency repairs")  # If approved, timeline from lease
+    alternative_action: Optional[str] = Field(None, example="Please contact vendor directly at 555-1234")  # What tenant should do instead (if rejected)
 
 
 class VendorWorkOrder(BaseModel):

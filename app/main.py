@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
+from typing import Optional, Dict, List, Any
 from enum import Enum
 import logging
 import asyncio
@@ -177,7 +177,7 @@ async def health_check():
 
 
 @app.get("/")
-async def root():
+async def root() -> Dict[str, str]:
     """
     API Root - Get available endpoints and service info
     
@@ -230,7 +230,7 @@ async def analyze_single(
         default=SearchStrategy.NATIVE_SEARCH,
         description="Search strategy: native_search (model searches web) or duckduckgo_search (DuckDuckGo fallback)"
     )
-):
+) -> AnalysisResult:
     """
     Analyze lease with single AI model for violations
     
