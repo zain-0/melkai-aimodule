@@ -16,8 +16,6 @@ services:
       # Application Settings
       - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-10}
       - SEARCH_RESULTS_LIMIT=${SEARCH_RESULTS_LIMIT:-10}
-    env_file:
-      - .env
     volumes:
       # Mount logs directory if needed
       - ./logs:/app/logs
