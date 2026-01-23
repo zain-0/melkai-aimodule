@@ -25,7 +25,16 @@ jobs:
         key: ${{ secrets.DEPLOY_SSH_KEY }}
         port: ${{ secrets.DEPLOY_PORT || 22 }}
         script: |
+          # Check if directory exists and is a git repo
+          if [ ! -d ~/melkai-aimodule/.git ]; then
+            echo "⚠️ Git repo not found, cloning fresh..."
+            rm -rf ~/melkai-aimodule
+            git clone https://github.com/zain-0/melkai-aimodule.git ~/melkai-aimodule
+          fi
+          
           cd ~/melkai-aimodule
+          git fetch origin
+          git reset --hard origin/main
           git pull origin main
           sudo docker-compose down
           sudo docker-compose build --no-cache
