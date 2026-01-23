@@ -1846,7 +1846,7 @@ RULES:
             logger.info("Extracting maintenance request from chat conversation")
             
             # Use Haiku (fast and cheap)
-            model = "us.anthropic.claude-3-haiku-20240307-v1:0"
+            model = settings.FREE_MODEL
             
             # Build conversation context
             messages = [{"role": msg.role, "content": msg.content} for msg in conversation_history]
@@ -1858,17 +1858,25 @@ RULES:
             
             system_prompt = """Extract a maintenance request from the tenant's conversation.
 
+INSTRUCTIONS:
+- Extract whatever information is available, even if limited
+- If details are vague or missing, note that in the description
+- If tenant was non-communicative, summarize what the assistant suggested
+- Always provide a title and description based on available information
+
 OUTPUT REQUIREMENTS:
-1. Title: Brief summary from tenant's perspective (max 80 characters)
-2. Description: Detailed description including all relevant details from conversation
+1. Title: Brief summary of the issue (max 80 characters)
+2. Description: Include all available details. If information is limited, state what is known and what is unclear.
 
 RESPONSE FORMAT (JSON only):
 {
   "title": "brief issue summary",
-  "description": "complete description with all details"
+  "description": "complete description with all available details"
 }
 
-Be concise but include all important details."""
+EXAMPLES:
+- Vague conversation: {"title": "Door lock issue", "description": "Tenant reported a broken door lock but did not provide specific details about the problem. May require on-site inspection to diagnose."}
+- Clear conversation: {"title": "Master bathroom shower low water pressure", "description": "Shower has low water pressure. The shower head is fixed to the pipe and cannot be removed."}"""
 
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
