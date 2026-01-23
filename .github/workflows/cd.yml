@@ -30,13 +30,22 @@ jobs:
             echo "⚠️ Git repo not found, cloning fresh..."
             rm -rf ~/melkai-aimodule
             git clone https://github.com/zain-0/melkai-aimodule.git ~/melkai-aimodule
+            echo "✅ Repo cloned successfully"
+          else
+            echo "📂 Git repo found, pulling latest changes..."
+            cd ~/melkai-aimodule
+            git fetch origin
+            git reset --hard origin/main
+            git pull origin main
           fi
           
+          # Verify we're in the right directory
           cd ~/melkai-aimodule
-          git fetch origin
-          git reset --hard origin/main
-          git pull origin main
-          sudo docker-compose down
+          echo "📍 Current directory: $(pwd)"
+          echo "📄 Files: $(ls -la)"
+          
+          # Deploy with docker
+          sudo docker-compose down || true
           sudo docker-compose build --no-cache
           sudo docker-compose up -d
           echo "✅ Deployment complete"
