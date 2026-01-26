@@ -1677,38 +1677,40 @@ class BedrockClient:
                     suggestTicket=True
                 )
             
-            system_prompt = MAINTENANCE_CHAT_SYSTEM_PROMPT
+            # Use Claude Haiku (fast, cost-effective, consistent with other APIs)
+            model = settings.FREE_MODEL
             
+            # Format messages for Anthropic API
             messages = [{"role": msg.role, "content": msg.content} for msg in conversation_history]
             
-            # Format for Llama - Use Llama 3.1 70B (fast, reliable)
-            user_prompt = "\n\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in messages])
-            
-            # Use Llama 3.1 70B Instruct
-            llama_model = "us.meta.llama3-1-70b-instruct-v1:0"
-            
-            # Create system prompt - simpler and clearer
-            simple_system = """You are a maintenance assistant. Help tenants troubleshoot issues.
+            # Create system prompt for JSON response
+            system_prompt = """You are a maintenance assistant. Help tenants troubleshoot issues.
 
 RESPONSE FORMAT (IMPORTANT):
 Return JSON: {"response": "your message", "suggestTicket": false}
 
-RULES:
+STRICT RULES:
+- ONLY discuss maintenance/property issues
+- If asked non-maintenance questions, say: "I'm here to help with maintenance issues only. Do you have a maintenance problem?"
 - "response" is plain text (your message)
 - "suggestTicket" is true when professional help needed
 - Keep responses short (2-3 sentences)
 - Ask questions to understand the issue
 - Suggest only safe solutions
-- Set suggestTicket=true after 3-4 exchanges without resolution"""
+- Set suggestTicket=true after 3-4 exchanges without resolution
+- NEVER say "I'll create/submit a ticket" or "I can help submit"
+- ONLY say: "Click the red button to submit your maintenance request"
+- When ready, say EXACTLY: "Click the red button to submit your maintenance request" """
             
             body = {
-                "prompt": f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{simple_system}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
-                "max_gen_len": 512,
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 512,
                 "temperature": 0.3,
-                "top_p": 0.9
+                "system": system_prompt,
+                "messages": messages
             }
             
-            response_text, _ = self._call_bedrock_with_retry(llama_model, body)
+            response_text, _ = self._call_bedrock_with_retry(model, body)
             elapsed_time = time.time() - start_time
             
             logger.info(f"Maintenance chat response received in {elapsed_time:.2f}s")
@@ -1868,6 +1870,8 @@ OUTPUT REQUIREMENTS:
 1. Title: Brief summary of the issue (max 80 characters)
 2. Description: Include all available details. If information is limited, state what is known and what is unclear.
 
+CRITICAL: You MUST respond with ONLY valid JSON. No other text.
+
 RESPONSE FORMAT (JSON only):
 {
   "title": "brief issue summary",
@@ -1875,12 +1879,12 @@ RESPONSE FORMAT (JSON only):
 }
 
 EXAMPLES:
-- Vague conversation: {"title": "Door lock issue", "description": "Tenant reported a broken door lock but did not provide specific details about the problem. May require on-site inspection to diagnose."}
-- Clear conversation: {"title": "Master bathroom shower low water pressure", "description": "Shower has low water pressure. The shower head is fixed to the pipe and cannot be removed."}"""
+- Vague: {"title": "Door lock issue", "description": "Tenant reported a broken door lock but did not provide specific details about the problem. May require on-site inspection to diagnose."}
+- Clear: {"title": "Master bathroom shower low water pressure", "description": "Shower has low water pressure. The shower head is fixed to the pipe and cannot be removed."}"""
 
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 300,  # Low token limit - extraction is brief
+                "max_tokens": 500,  # Increased for vague conversations that need more explanation
                 "temperature": 0.0,  # Deterministic
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": f"Extract maintenance request from this conversation:\n\n{conversation_text}"}]
@@ -1890,18 +1894,28 @@ EXAMPLES:
             elapsed_time = time.time() - start_time
             
             logger.info(f"Extraction completed in {elapsed_time:.2f}s")
+            logger.debug(f"Raw AI response: {response_text}")
             
-            # Parse JSON response
-            json_str = self._extract_json_from_markdown(response_text)
-            if not json_str:
-                json_str = response_text
-            
-            json_str = self._sanitize_json_string(json_str)
-            parsed = json.loads(json_str)
-            
-            # Truncate title to 80 chars if needed
-            title = parsed.get("title", "Maintenance request")[:80]
-            description = parsed.get("description", "Issue reported through chat")
+            # Parse JSON response with robust error handling
+            try:
+                json_str = self._extract_json_from_markdown(response_text)
+                if not json_str:
+                    json_str = response_text
+                
+                json_str = self._sanitize_json_string(json_str)
+                parsed = json.loads(json_str)
+                
+                # Truncate title to 80 chars if needed
+                title = parsed.get("title", "Maintenance request")[:80]
+                description = parsed.get("description", "Issue reported through chat")
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing failed: {str(e)}")
+                logger.error(f"Failed to parse response: {response_text}")
+                # Fallback: extract first user message as title
+                first_user_msg = next((msg.content for msg in conversation_history if msg.role == "user"), "Maintenance issue")
+                title = first_user_msg[:80]
+                description = f"Maintenance issue reported. Details: {first_user_msg}. Additional context may be limited."
             
             return MaintenanceRequestExtraction(
                 title=title,
