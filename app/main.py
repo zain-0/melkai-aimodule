@@ -84,6 +84,13 @@ from app.validators import (
     validate_move_out_request,
     validate_owner_notes
 )
+from app.topic_validator import (
+    validate_maintenance_topic,
+    validate_move_out_topic,
+    validate_tenant_chat_topic,
+    validate_email_rewrite_topic,
+    OFF_TOPIC_MESSAGE
+)
 
 logger = logging.getLogger(__name__)
 
@@ -618,6 +625,18 @@ async def evaluate_maintenance_request(
     validated_request = validate_maintenance_request(maintenance_request)
     validated_notes = validate_landlord_notes(landlord_notes) if landlord_notes else None
     
+    # Validate topic
+    is_valid, error_msg = validate_maintenance_topic(validated_request, validated_notes)
+    if not is_valid:
+        return MaintenanceResponse(
+            decision="rejected",
+            response_to_tenant=error_msg,
+            lease_clauses_cited=[],
+            decision_reasons=["Off-topic query"],
+            estimated_cost_usd=0.0,
+            landlord_responsible=False
+        )
+    
     # Extract lease info
     from app.pdf_parser import PDFParser
     pdf_parser = PDFParser()
@@ -675,6 +694,20 @@ async def generate_vendor_work_order(
     # Validate inputs
     validated_request = validate_maintenance_request(maintenance_request)
     validated_notes = validate_landlord_notes(landlord_notes) if landlord_notes else None
+    
+    # Validate topic
+    is_valid, error_msg = validate_maintenance_topic(validated_request, validated_notes)
+    if not is_valid:
+        return VendorWorkOrder(
+            work_order_title=error_msg,
+            work_order_description="",
+            property_address="",
+            urgency_level="low",
+            estimated_scope="",
+            special_instructions="",
+            access_info="",
+            estimated_cost_usd=0.0
+        )
     
     # Extract lease info
     from app.pdf_parser import PDFParser
@@ -789,6 +822,20 @@ async def maintenance_workflow(
     validated_request = validate_maintenance_request(maintenance_request)
     validated_notes = validate_landlord_notes(landlord_notes) if landlord_notes else None
     
+    # Validate topic
+    is_valid, error_msg = validate_maintenance_topic(validated_request, validated_notes)
+    if not is_valid:
+        return MaintenanceWorkflow(
+            decision="rejected",
+            tenant_message=error_msg,
+            vendor_work_order=None,
+            lease_clauses_cited=[],
+            decision_reasons=["Off-topic query"],
+            next_steps=[],
+            estimated_timeline="N/A",
+            estimated_cost_usd=0.0
+        )
+    
     # Extract lease info
     from app.pdf_parser import PDFParser
     pdf_parser = PDFParser()
@@ -848,6 +895,22 @@ async def evaluate_move_out_request(
     validated_request = validate_move_out_request(move_out_request)
     validated_notes = validate_owner_notes(owner_notes) if owner_notes else None
     
+    # Validate topic
+    is_valid, error_msg = validate_move_out_topic(validated_request, validated_notes)
+    if not is_valid:
+        return MoveOutResponse(
+            status="rejected",
+            response_to_tenant=error_msg,
+            notice_period_compliant=False,
+            security_deposit_info="N/A",
+            deductions_summary=[],
+            refund_amount=0.0,
+            next_steps=[],
+            estimated_timeline="N/A",
+            lease_clauses_cited=[],
+            estimated_cost_usd=0.0
+        )
+    
     # Extract lease info
     from app.pdf_parser import PDFParser
     pdf_parser = PDFParser()
@@ -890,6 +953,17 @@ async def rewrite_tenant_message(
     """
     # Validate input
     validated_message = validate_tenant_message(message)
+    
+    # Validate topic
+    is_valid, error_msg = validate_maintenance_topic(validated_message)
+    if not is_valid:
+        return TenantMessageRewrite(
+            original_message=message,
+            rewritten_message=error_msg,
+            improvements_made=["Off-topic query rejected"],
+            estimated_urgency="low",
+            estimated_cost_usd=0.0
+        )
     
     logger.info(f"Rewriting tenant message: {validated_message[:100]}...")
     
@@ -1031,6 +1105,15 @@ async def maintenance_chat(
     user_message = chat_request.conversationHistory[-1].content
     logger.info(f"Maintenance chat from {client_ip}: '{user_message[:50]}...'")
     logger.info(f"Conversation history: {len(chat_request.conversationHistory)} messages")
+    
+    # Validate topic (only for user messages, skip for very short responses like "yes"/"no")
+    if len(user_message.strip()) > 10:  # Only validate longer messages
+        is_valid, error_msg = validate_tenant_chat_topic(user_message)
+        if not is_valid:
+            return MaintenanceChatResponse(
+                response=error_msg,
+                suggestTicket=False
+            )
     
     try:
         # Process chat request
@@ -1323,6 +1406,16 @@ async def rewrite_as_email(request: EmailRewriteRequest):
     """
     try:
         logger.info(f"Rewriting text as email (length: {len(request.text)})")
+        
+        # Validate topic
+        is_valid, error_msg = validate_email_rewrite_topic(request.text)
+        if not is_valid:
+            return EmailRewriteResponse(
+                original_text=request.text,
+                email_content=error_msg,
+                subject=None,
+                status="rejected"
+            )
         
         # Create prompt for email rewriting
         system_prompt = """You are a professional email writing assistant. Your task is to rewrite provided text into a well-formatted, professional email.
