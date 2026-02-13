@@ -51,10 +51,10 @@ class TextractOCRProcessor:
         self.textract_client = self.session.client('textract', config=boto_config)
         logger.info(f"Textract OCR processor initialized (region={self.region}, max_connections={max_workers})")
     
-    def _extract_pdf_pages_as_document(self, pdf_bytes: bytes, start_page: int, end_page: int) -> bytes:
+    def _extract_pdf_pages_as_images(self, pdf_bytes: bytes, start_page: int, end_page: int) -> List[bytes]:
         """
-        Extract a range of pages from PDF as a new PDF document
-        More efficient than converting to images - Textract can process multi-page PDFs
+        Extract pages as PNG images for Textract
+        More reliable than PDF format for scanned documents
         
         Args:
             pdf_bytes: Original PDF bytes
@@ -62,21 +62,25 @@ class TextractOCRProcessor:
             end_page: End page (0-indexed, inclusive)
             
         Returns:
-            PDF bytes containing only the specified pages
+            List of PNG image bytes for each page
         """
         pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
         
-        # Create new PDF with selected pages
-        output_pdf = fitz.open()
-        output_pdf.insert_pdf(pdf_document, from_page=start_page, to_page=end_page)
+        images = []
+        for page_num in range(start_page, end_page + 1):
+            page = pdf_document[page_num]
+            
+            # Render page to image at 150 DPI (good balance of quality and size)
+            # zoom = 150 / 72 = 2.08 (72 is default DPI)
+            mat = fitz.Matrix(2.08, 2.08)
+            pix = page.get_pixmap(matrix=mat)
+            
+            # Convert to PNG bytes
+            img_bytes = pix.tobytes("png")
+            images.append(img_bytes)
         
-        # Get bytes
-        output_bytes = output_pdf.tobytes()
-        
-        output_pdf.close()
         pdf_document.close()
-        
-        return output_bytes
+        return images
     
     def _extract_text_from_textract_response(self, response: dict) -> str:
         """Extract text from Textract API response"""
@@ -91,8 +95,8 @@ class TextractOCRProcessor:
     
     def _process_page_batch(self, pdf_bytes: bytes, start_page: int, end_page: int, total_pages: int) -> List[str]:
         """
-        Process a batch of pages with Textract (2-5 pages per batch)
-        More efficient than single-page processing
+        Process a batch of pages with Textract
+        Converts each page to PNG image for maximum compatibility
         
         Args:
             pdf_bytes: Original PDF bytes
@@ -104,45 +108,37 @@ class TextractOCRProcessor:
             List of extracted text for each page in batch
         """
         try:
-            # Extract pages as a PDF document (more efficient than images)
-            batch_pdf = self._extract_pdf_pages_as_document(pdf_bytes, start_page, end_page)
+            # Extract pages as PNG images (more reliable for scanned PDFs)
+            page_images = self._extract_pdf_pages_as_images(pdf_bytes, start_page, end_page)
             
             page_count = end_page - start_page + 1
-            logger.debug(f"Calling Textract for pages {start_page + 1}-{end_page + 1}/{total_pages} ({page_count} pages)")
+            logger.debug(f"Processing {page_count} pages as images for Textract (pages {start_page + 1}-{end_page + 1}/{total_pages})")
             
-            # Call Textract with multi-page PDF
-            response = self.textract_client.detect_document_text(
-                Document={'Bytes': batch_pdf}
-            )
+            # Process each image individually (Textract DetectDocumentText requires one document)
+            pages_text = []
             
-            # Extract text grouped by page
-            pages_text = [''] * page_count
-            
-            for block in response.get('Blocks', []):
-                if block['BlockType'] == 'LINE' and 'Page' in block:
-                    page_idx = block['Page'] - 1  # Textract pages are 1-indexed
-                    if 0 <= page_idx < page_count:
-                        pages_text[page_idx] += block.get('Text', '') + '\n'
-            
-            # Log results
-            for i, text in enumerate(pages_text):
-                if text:
-                    logger.info(f"OCR extracted {len(text)} chars from page {start_page + i + 1}")
-                else:
-                    logger.warning(f"No text extracted from page {start_page + i + 1}")
+            for i, img_bytes in enumerate(page_images):
+                try:
+                    response = self.textract_client.detect_document_text(
+                        Document={'Bytes': img_bytes}
+                    )
+                    
+                    # Extract text from this page
+                    text = self._extract_text_from_textract_response(response)
+                    pages_text.append(text)
+                    
+                    if text:
+                        logger.info(f"OCR extracted {len(text)} chars from page {start_page + i + 1}")
+                    else:
+                        logger.warning(f"No text extracted from page {start_page + i + 1}")
+                        
+                except ClientError as e:
+                    error_code = e.response['Error']['Code']
+                    logger.error(f"Textract error on page {start_page + i + 1}: {error_code}")
+                    pages_text.append(f"[OCR failed for page {start_page + i + 1}]")
             
             return pages_text
             
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            if error_code in ['ProvisionedThroughputExceededException', 'ThrottlingException']:
-                logger.warning(f"Textract throttled on pages {start_page + 1}-{end_page + 1}, retrying...")
-                import time
-                time.sleep(2)
-                return self._process_page_batch(pdf_bytes, start_page, end_page, total_pages)
-            else:
-                logger.error(f"Textract error on pages {start_page + 1}-{end_page + 1}: {error_code} - {e}")
-                return [f"[OCR failed for page {start_page + i + 1}]" for i in range(end_page - start_page + 1)]
         except Exception as e:
             logger.error(f"OCR processing error on pages {start_page + 1}-{end_page + 1}: {e}")
             return [f"[OCR error on page {start_page + i + 1}]" for i in range(end_page - start_page + 1)]

@@ -114,6 +114,11 @@ class LeaseBedrockClient:
         """
         content = response.get('content', '')
         
+        # CRITICAL DEBUG: Log the FULL raw response to see what AI is returning
+        logger.info(f"===== RAW AI RESPONSE (full) =====")
+        logger.info(content)
+        logger.info(f"===== END RAW RESPONSE ({len(content)} chars) =====")
+        
         # Log first 200 chars of response for debugging
         logger.info(f"Model response preview: {content[:200]}...")
         

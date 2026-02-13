@@ -224,6 +224,17 @@ class LeaseExtractor:
                 f"rent={extracted_data.get('rent_and_deposits', {}).get('monthly_base_rent')}"
             )
             
+            # DETAILED DEBUG: Log the actual AI response for diagnosis
+            logger.info(f"Window {window.window_id} RAW AI RESPONSE (first 500 chars): {str(extracted_data)[:500]}")
+            
+            # Log specific fields to see if data exists
+            if extracted_data.get('rent_and_deposits'):
+                logger.info(f"Window {window.window_id} rent_and_deposits: {extracted_data['rent_and_deposits']}")
+            if extracted_data.get('term'):
+                logger.info(f"Window {window.window_id} term: {extracted_data['term']}")
+            if extracted_data.get('utility_responsibilities'):
+                logger.info(f"Window {window.window_id} utilities count: {len(extracted_data['utility_responsibilities'])}, first item: {extracted_data['utility_responsibilities'][0] if extracted_data['utility_responsibilities'] else 'none'}")
+            
             duration = time.time() - start_time
             
             logger.debug(

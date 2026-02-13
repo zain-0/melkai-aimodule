@@ -21,6 +21,14 @@ class LeaseResultMerger:
         logger.info(f"Merging {len(window_results)} window results")
         self.conflicts = []
         
+        # DEBUG: Log what we're receiving
+        for idx, wr in enumerate(window_results):
+            data = wr.get('data', {})
+            logger.info(f"Window {idx} data keys: {list(data.keys())}")
+            logger.info(f"Window {idx} utilities: {len(data.get('utility_responsibilities', []))}, "
+                       f"fees: {len(data.get('additional_fees', []))}, "
+                       f"rent: {data.get('rent_and_deposits', {}).get('monthly_base_rent') if data.get('rent_and_deposits') else 'None'}")
+        
         merged = {
             'utility_responsibilities': [],
             'common_area_maintenance': [],
